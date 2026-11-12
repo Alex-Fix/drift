@@ -96,6 +96,20 @@ FairPlay — legal/maintenance risk; the TV's HLS video path; DLNA). Nothing is 
   - Still open: TEARDOWN gets no answer (session ends when the connection closes); not yet tried: HEVC/4K (step 3,
     the TV sets feature bit 42 — multi-codec screen — which suggests HEVC is accepted), audio (step 4), native
     messaging throughput (step 5).
+- **2026-11-12, step 5 (native-messaging throughput): GO — keep native messaging, drop the WebSocket fallback.**
+  Bench extension page → native host (base64 in JSON, host decodes), M1 Pro Mac, Chrome 157:
+
+  | Profile | Delivered | Host latency p50 / p99 / max | JS per frame avg / worst |
+  |---|---|---|---|
+  | burst 64 KiB × 2000 | 3.4 Gbit/s | 107 / 191 / 193 ms (queueing) | 0.06 ms |
+  | burst 1 MiB × 200 | 3.8 Gbit/s | 88 / 160 / 160 ms (queueing) | 1.4 ms |
+  | 4K60, 40 Mbit/s + 10× keyframe each second | 46 Mbit/s | 2.5 / 12.3 / 15.0 ms | 0.53 / 6.7 ms |
+  | 2×, 80 Mbit/s + 10× keyframe each second | 92 Mbit/s | 3.7 / 21.1 / 24.4 ms | 0.93 / 12.4 ms |
+  | 1080p60, 12 Mbit/s | 14 Mbit/s | 1.4 / 5.1 / 6.2 ms | 0.19 / 1.7 ms |
+
+  Consequence: base64 of a 4K keyframe costs up to ~12 ms on the sending thread — encoding and chunking run in a
+  **worker**, never on the page's main thread. Not yet measured: the real path's extra hop (content script →
+  service worker → host), Linux and Windows; re-check in the soak test.
 
 ### User flow
 
@@ -177,7 +191,7 @@ All within `"v": 1`; fixtures for each shape and each new rule.
 ## Open questions
 
 1. Does the TV accept HAP-keyed mirroring without FairPlay `fp-setup`? (Phase 0, steps 1–2.)
-2. Does native messaging sustain ≥ 1.5× the 4K60 bitrate? (Phase 0, step 5.)
+2. ~~Does native messaging sustain ≥ 1.5× the 4K60 bitrate?~~ Yes (Phase 0, step 5: 2× held, ~85× burst headroom).
 3. Which audio formats does the TV accept on the mirroring path (AAC-LC vs AAC-ELD)? (Phase 0, step 4.)
 4. The TV sets `VideoHTTPLiveStreams` and reports an HLS-capable web engine: is there a newer AirPlay video path that
    would let it fetch HLS itself at full quality? Research item, not on the v1 path.
@@ -196,4 +210,4 @@ Branch `feat/airplay-mirroring`, one commit (or small PR) each:
 7. Popup: mirror flow, pairing UI, status.
 8. Tab-capture fallback (offscreen document) for blank `captureStream()`.
 9. Mid-stream step-down, 30-minute soak, README.
-10. (Only if Phase 0 step 5 says so) localhost WebSocket media channel.
+10. ~~Localhost WebSocket media channel~~ — not needed (Phase 0 step 5: native messaging sustains 2× the 4K60 target).
