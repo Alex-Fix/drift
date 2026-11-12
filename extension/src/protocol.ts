@@ -12,7 +12,11 @@ export type ErrorCode =
   | "unsupported_url"
   | "pairing_required"
   | "device_unreachable"
-  | "internal_error";
+  | "internal_error"
+  | "mirror_unsupported"
+  | "mirror_failed"
+  | "session_unknown"
+  | "pairing_failed";
 
 export interface DeviceInfo {
   id: string;
@@ -21,6 +25,22 @@ export interface DeviceInfo {
 }
 
 export type PlaybackState = "idle" | "loading" | "playing" | "paused";
+export type VideoCodec = "h264" | "hevc";
+
+/** Interleaved s16le stereo at 44.1 kHz: the only audio the host takes (it wraps it as uncompressed ALAC). */
+export interface AudioFormat {
+  format: "pcm_s16";
+  rate: 44100;
+  channels: 2;
+}
+
+/** Decoder setup: the avcC / hvcC record WebCodecs reports as `decoderConfig.description`, base64. */
+export interface VideoConfigMessage {
+  codec: VideoCodec;
+  record: string;
+  width: number;
+  height: number;
+}
 
 /** Requests without the envelope; `NativeClient` adds `v` and `id`. */
 export type Request =
@@ -28,13 +48,23 @@ export type Request =
   | { type: "scan"; timeout_ms?: number }
   | { type: "play"; device: string; url: string; title?: string; position?: number }
   | { type: "control"; device: string; action: "pause" | "resume" | "seek"; position?: number }
-  | { type: "stop"; device: string };
+  | { type: "stop"; device: string }
+  | { type: "pair_begin"; device: string }
+  | { type: "pair_pin"; device: string; pin: string }
+  | { type: "mirror_start"; device: string; audio?: AudioFormat }
+  | { type: "mirror_stop"; session: string };
+
+/** Extension → host, no id, no response (media at frame rate). `ts`: microseconds on the capture clock. */
+export type Notification =
+  | { type: "video"; session: string; ts: number; key: boolean; data: string; config?: VideoConfigMessage }
+  | { type: "audio"; session: string; ts: number; data: string };
 
 export type Response =
   | { v: 1; id: string; type: "hello"; host: string }
   | { v: 1; id: string; type: "devices"; devices: DeviceInfo[] }
   | { v: 1; id: string; type: "ok" }
-  | { v: 1; id?: string; type: "error"; code: ErrorCode };
+  | { v: 1; id?: string; type: "error"; code: ErrorCode }
+  | { v: 1; id: string; type: "mirror_started"; session: string };
 
 export interface StatusEvent {
   v: 1;
@@ -45,7 +75,21 @@ export interface StatusEvent {
   duration?: number;
 }
 
-export type Message = (Request & { v: 1; id: string }) | Response | StatusEvent;
+export interface MirrorStatusEvent {
+  v: 1;
+  type: "mirror_status";
+  session: string;
+  state: "mirroring" | "stopped";
+  reason?: ErrorCode;
+  codec?: VideoCodec;
+  width?: number;
+  height?: number;
+  dropped?: number;
+}
+
+export type HostEvent = StatusEvent | MirrorStatusEvent;
+
+export type Message = (Request & { v: 1; id: string }) | Response | HostEvent | (Notification & { v: 1 });
 
 export class ProtocolError extends Error {
   constructor(readonly code: ErrorCode) {
@@ -59,8 +103,12 @@ type Spec =
   | { kind: "num"; min: number; max?: number; integer?: boolean }
   | { kind: "oneOf"; values: readonly string[] }
   | { kind: "url" }
-  | { kind: "devices" };
-type Kind = "request" | "response" | "event";
+  | { kind: "devices" }
+  | { kind: "pattern"; regex: RegExp } // anchored; at most 256 characters
+  | { kind: "bool" }
+  | { kind: "base64"; maxBytes: number } // decoded size
+  | { kind: "obj"; fields: Fields };
+type Kind = "request" | "response" | "event" | "notification";
 type Fields = Record<string, [spec: Spec, required: boolean]>;
 
 const ID: Spec = { kind: "str", max: 64 };
@@ -79,7 +127,18 @@ const ERROR_CODES: readonly ErrorCode[] = [
   "pairing_required",
   "device_unreachable",
   "internal_error",
+  "mirror_unsupported",
+  "mirror_failed",
+  "session_unknown",
+  "pairing_failed",
 ];
+const SESSION: Spec = { kind: "pattern", regex: /^[0-9a-f]{32}$/ };
+const MEDIA_TS: Spec = { kind: "num", min: 0, max: 2 ** 53, integer: true };
+const DIMENSION: Spec = { kind: "num", min: 16, max: 8192, integer: true };
+const VIDEO_CODECS: Spec = { kind: "oneOf", values: ["h264", "hevc"] };
+export const MAX_VIDEO_CHUNK = 2 * 1024 * 1024;
+export const MAX_AUDIO_CHUNK = 256 * 1024;
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
 const MESSAGES: Record<string, [Kind, Fields]> = {
   hello: ["request", {}],
@@ -97,9 +156,30 @@ const MESSAGES: Record<string, [Kind, Fields]> = {
     },
   ],
   stop: ["request", { device: [DEVICE, true] }],
+  pair_begin: ["request", { device: [DEVICE, true] }],
+  pair_pin: ["request", { device: [DEVICE, true], pin: [{ kind: "pattern", regex: /^[0-9]{4,8}$/ }, true] }],
+  mirror_start: [
+    "request",
+    {
+      device: [DEVICE, true],
+      audio: [
+        {
+          kind: "obj",
+          fields: {
+            format: [{ kind: "oneOf", values: ["pcm_s16"] }, true],
+            rate: [{ kind: "num", min: 44100, max: 44100, integer: true }, true],
+            channels: [{ kind: "num", min: 2, max: 2, integer: true }, true],
+          },
+        },
+        false,
+      ],
+    },
+  ],
+  mirror_stop: ["request", { session: [SESSION, true] }],
   devices: ["response", { devices: [{ kind: "devices" }, true] }],
   ok: ["response", {}],
   error: ["response", { code: [{ kind: "oneOf", values: ERROR_CODES }, true] }],
+  mirror_started: ["response", { session: [SESSION, true] }],
   status: [
     "event",
     {
@@ -108,6 +188,43 @@ const MESSAGES: Record<string, [Kind, Fields]> = {
       position: [POSITION, false],
       duration: [POSITION, false],
     },
+  ],
+  mirror_status: [
+    "event",
+    {
+      session: [SESSION, true],
+      state: [{ kind: "oneOf", values: ["mirroring", "stopped"] }, true],
+      reason: [{ kind: "oneOf", values: ERROR_CODES }, false],
+      codec: [VIDEO_CODECS, false],
+      width: [DIMENSION, false],
+      height: [DIMENSION, false],
+      dropped: [{ kind: "num", min: 0, max: 2 ** 53, integer: true }, false],
+    },
+  ],
+  video: [
+    "notification",
+    {
+      session: [SESSION, true],
+      ts: [MEDIA_TS, true],
+      key: [{ kind: "bool" }, true],
+      data: [{ kind: "base64", maxBytes: MAX_VIDEO_CHUNK }, true],
+      config: [
+        {
+          kind: "obj",
+          fields: {
+            codec: [VIDEO_CODECS, true],
+            record: [{ kind: "base64", maxBytes: 64 * 1024 }, true],
+            width: [DIMENSION, true],
+            height: [DIMENSION, true],
+          },
+        },
+        false,
+      ],
+    },
+  ],
+  audio: [
+    "notification",
+    { session: [SESSION, true], ts: [MEDIA_TS, true], data: [{ kind: "base64", maxBytes: MAX_AUDIO_CHUNK }, true] },
   ],
 };
 
@@ -131,24 +248,26 @@ export function parse(raw: unknown): Message {
 
   if ("id" in raw) {
     check(ID, raw.id);
-    if (kind === "event") throw new ProtocolError("invalid_message");
+    if (kind === "event" || kind === "notification") throw new ProtocolError("invalid_message");
   } else if (kind === "request" || (kind === "response" && raw.type !== "error")) {
     throw new ProtocolError("invalid_message");
   }
 
-  for (const key of Object.keys(raw)) {
-    if (key !== "v" && key !== "type" && key !== "id" && !Object.hasOwn(fields, key)) {
-      throw new ProtocolError("invalid_message");
-    }
-  }
-  for (const [name, [spec, required]] of Object.entries(fields)) {
-    if (name in raw) check(spec, raw[name]);
-    else if (required) throw new ProtocolError("invalid_message");
-  }
+  checkFields(raw, fields, ["v", "type", "id"]);
   if (raw.type === "control" && raw.action === "seek" && !("position" in raw)) {
     throw new ProtocolError("invalid_message");
   }
   return raw as unknown as Message;
+}
+
+function checkFields(obj: Record<string, unknown>, fields: Fields, extra: readonly string[]): void {
+  for (const key of Object.keys(obj)) {
+    if (!extra.includes(key) && !Object.hasOwn(fields, key)) fail();
+  }
+  for (const [name, [spec, required]] of Object.entries(fields)) {
+    if (Object.hasOwn(obj, name)) check(spec, obj[name]);
+    else if (required) fail();
+  }
 }
 
 function check(spec: Spec, value: unknown): void {
@@ -170,6 +289,27 @@ function check(spec: Spec, value: unknown): void {
     case "devices":
       if (!Array.isArray(value) || value.length > MAX_DEVICES) fail();
       for (const device of value) checkDevice(device);
+      return;
+    case "pattern":
+      if (typeof value !== "string" || value.length > 256 || !spec.regex.test(value)) fail();
+      return;
+    case "bool":
+      if (typeof value !== "boolean") fail();
+      return;
+    case "base64":
+      // Shape and size only (non-empty, padded, base64 alphabet), like the host.
+      if (
+        typeof value !== "string" ||
+        value.length === 0 ||
+        value.length % 4 !== 0 ||
+        value.length > Math.floor((spec.maxBytes + 2) / 3) * 4 ||
+        !BASE64.test(value)
+      )
+        fail();
+      return;
+    case "obj":
+      if (!isRecord(value)) fail();
+      checkFields(value, spec.fields, []);
       return;
   }
 }

@@ -1,11 +1,14 @@
 import io
 import json
 import struct
+from collections.abc import Awaitable, Callable
 
 from drift_host import __version__, messaging
 from drift_host.airplay import Action, Device
 from drift_host.app import Host, serve
+from drift_host.mirror.session import Control
 from drift_host.protocol import ProtocolError
+from tests.fake_tv import FakeTV
 
 
 class FakeReceivers:
@@ -26,6 +29,22 @@ class FakeReceivers:
 
     async def stop(self, device: str) -> None:
         self.calls.append(("stop", device))
+
+    tv: FakeTV | None = None
+    pin = "4321"
+
+    async def open_mirror(self, device: str) -> Control:
+        if device != "AA:BB":
+            raise ProtocolError("unknown_device")
+        assert self.tv is not None
+        return self.tv
+
+    async def pair(self, device: str, read_pin: Callable[[], Awaitable[str]]) -> None:
+        if device != "AA:BB":
+            raise ProtocolError("unknown_device")
+        if await read_pin() != self.pin:
+            raise ProtocolError("pairing_failed")
+        self.calls.append(("paired", device))
 
     async def close(self) -> None:
         self.closed = True

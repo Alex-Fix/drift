@@ -11,7 +11,7 @@ const client = new NativeClient(
   () => chrome.runtime.connectNative(HOST_NAME),
   (event) => {
     // The popup may be closed: nobody listening is fine.
-    chrome.runtime.sendMessage({ kind: "status", event }).catch(() => undefined);
+    chrome.runtime.sendMessage({ kind: "event", event }).catch(() => undefined);
   },
 );
 

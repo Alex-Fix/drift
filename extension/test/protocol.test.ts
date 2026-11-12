@@ -38,3 +38,20 @@ describe("parse", () => {
     );
   });
 });
+
+describe("media limits", () => {
+  const session = "0123456789abcdef0123456789abcdef";
+  const video = (bytes: number) => ({
+    v: 1,
+    type: "video",
+    session,
+    ts: 0,
+    key: true,
+    data: Buffer.alloc(bytes).toString("base64"),
+  });
+
+  it("accepts a 2 MiB video chunk and refuses one past it", () => {
+    expect(() => parse(video(2 * 1024 * 1024))).not.toThrow();
+    expect(() => parse(video(2 * 1024 * 1024 + 3))).toThrow(ProtocolError);
+  });
+});

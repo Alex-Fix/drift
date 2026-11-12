@@ -28,3 +28,17 @@ def test_boolean_is_not_a_number() -> None:
 def test_error_drops_an_id_that_is_not_a_valid_id() -> None:
     assert error("invalid_message", "x" * 65) == {"v": 1, "type": "error", "code": "invalid_message"}
     assert error("invalid_message", 7) == {"v": 1, "type": "error", "code": "invalid_message"}
+
+
+def test_video_chunk_size_limit_is_two_mebibytes_decoded() -> None:
+    import base64
+
+    session = "0123456789abcdef0123456789abcdef"
+
+    def video(size: int) -> dict[str, object]:
+        data = base64.b64encode(bytes(size)).decode()
+        return {"v": 1, "type": "video", "session": session, "ts": 0, "key": True, "data": data}
+
+    parse(video(2 * 1024 * 1024))
+    with pytest.raises(ProtocolError):
+        parse(video(2 * 1024 * 1024 + 3))

@@ -1,0 +1,1 @@
+{ "v": 1, "type": "mirror_start", "id": "8", "device": "AA:BB:CC:DD:EE:FF", "audio": { "format": "pcm_s16", "rate": 44100, "channels": 2, "extra": 1 } }

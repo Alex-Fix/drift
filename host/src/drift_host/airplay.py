@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from pyatv.interface import AppleTV, BaseConfig, Storage
 
     from drift_host.mirror.pyatv_control import PyatvControl
+    from drift_host.mirror.session import Control
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,10 @@ class Receivers(Protocol):
     async def control(self, device: str, action: Action, position: float | None) -> None: ...
 
     async def stop(self, device: str) -> None: ...
+
+    async def pair(self, device: str, read_pin: Callable[[], Awaitable[str]]) -> None: ...
+
+    async def open_mirror(self, device: str) -> Control: ...
 
     async def close(self) -> None: ...
 
@@ -122,7 +127,13 @@ class PyatvReceivers:
         config = self._configs.get(device)
         if config is None:
             raise ProtocolError("unknown_device")
+        from pyatv.const import Protocol as AtvProtocol
+
         from drift_host.mirror.pyatv_control import PyatvControl
+
+        service = config.get_service(AtvProtocol.AirPlay)
+        if service is None or not supports_mirroring(service.properties.get("features")):
+            raise ProtocolError("mirror_unsupported")
 
         with _receiver_errors():
             return await PyatvControl.connect(config)
@@ -130,6 +141,7 @@ class PyatvReceivers:
     async def pair(self, device: str, read_pin: Callable[[], Awaitable[str]]) -> None:
         """Pair with a receiver found by the last scan; the receiver shows a PIN that `read_pin` returns."""
         import pyatv
+        from pyatv import exceptions
         from pyatv.const import Protocol as AtvProtocol
 
         config = self._configs.get(device)
@@ -145,10 +157,12 @@ class PyatvReceivers:
             if not pin.isdecimal() or len(pin) > 8:
                 raise ValueError("the PIN is the digits shown on the receiver")
             handler.pin(int(pin))
-            with _receiver_errors():
+            try:
                 await handler.finish()
+            except exceptions.PairingError as e:  # most often a wrong PIN
+                raise ProtocolError("pairing_failed") from e
             if not handler.has_paired:
-                raise ProtocolError("pairing_required")
+                raise ProtocolError("pairing_failed")
             await storage.save()
             if self._credentials is not None and sys.platform != "win32":
                 self._credentials.chmod(0o600)
@@ -173,6 +187,25 @@ class PyatvReceivers:
             await storage.load()
             self._storage = storage
         return self._storage
+
+
+_FEATURE_SCREEN = 1 << 7
+_FEATURE_FAIRPLAY_AUTH = 1 << 14
+_FEATURE_HOMEKIT_PAIRING = 1 << 46
+
+
+def supports_mirroring(features: str | None) -> bool:
+    """Whether the AirPlay `features` TXT value (`0xLOW,0xHIGH` or one number) advertises screen mirroring drift can
+    do: Screen set, HomeKit pairing set, FairPlay authentication clear (drift doesn't implement FairPlay)."""
+    if not features:
+        return False
+    try:
+        parts = [int(part, 16) for part in features.split(",")]
+    except ValueError:
+        return False
+    value = parts[0] | (parts[1] << 32 if len(parts) > 1 else 0)
+    wanted = _FEATURE_SCREEN | _FEATURE_HOMEKIT_PAIRING
+    return value & wanted == wanted and not value & _FEATURE_FAIRPLAY_AUTH
 
 
 @contextmanager

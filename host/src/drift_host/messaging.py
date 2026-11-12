@@ -11,7 +11,7 @@ from typing import BinaryIO
 
 from drift_host.protocol import ProtocolError
 
-MAX_INCOMING = 1024 * 1024  # Chrome allows 64 MiB towards the host; nothing we accept comes close.
+MAX_INCOMING = 3 * 1024 * 1024  # a 2 MiB video chunk, base64-encoded, plus JSON; Chrome allows 64 MiB
 MAX_OUTGOING = 1024 * 1024  # Chrome's limit towards the extension.
 
 _HEADER = struct.Struct("=I")

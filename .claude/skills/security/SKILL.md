@@ -31,8 +31,13 @@ same machine (it can talk to the host the same way the browser does).
 ## Rules
 
 ### Extension
-- Only extension pages (popup, offscreen) talk to the background, checked by `sender` (id, no tab, extension URL).
-  Content scripts and `externally_connectable` never reach the host.
+- Only extension pages (popup, offscreen) send **requests** to the background, checked by `sender` (id, no tab,
+  extension URL). `externally_connectable` never reaches the host.
+- **One exception: media.** Capture runs in the page, so the content script may send `video`/`audio` notifications —
+  only for the active session id, bound to the tab that started it, and nothing else. The host accepts media only for
+  the session it issued, caps chunk sizes, never parses payloads beyond framing them, and answers a wrong session
+  with one rate-limited `session_unknown`. Worst case: a hostile page corrupts the stream the user started from that
+  tab.
 - Page-derived strings are text: `textContent`, never `innerHTML`. CSP stays `script-src 'self'`.
 - Permissions: `activeTab` + `scripting` over broad host permissions; anything new is optional where possible and
   justified in the PR.
@@ -60,6 +65,8 @@ same machine (it can talk to the host the same way the browser does).
 
 ## Review checklist
 - [ ] New/changed message: validated on both sides, fixture added, limits defined?
+- [ ] Media path: can anything but the session's own tab send media, or anything but media come from a content
+      script?
 - [ ] Can a page-controlled value reach a filesystem path, a command line, or a URL the host fetches without checks?
 - [ ] Any new extension permission or host-permission pattern — justified, optional if possible?
 - [ ] `innerHTML`, `eval`, `new Function` or remote code anywhere? → reject.

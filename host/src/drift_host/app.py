@@ -1,39 +1,91 @@
-"""The dispatch loop: framed messages in, one task per request, responses and events out."""
+"""The dispatch loop: framed messages in; requests answered by tasks, media handled inline in arrival order."""
 
 import asyncio
 import logging
+import time
 from typing import BinaryIO, cast
 
 from drift_host import __version__, messaging
 from drift_host.airplay import Action, Receivers
-from drift_host.protocol import VERSION, ProtocolError, error, parse
+from drift_host.mirroring import Mirroring
+from drift_host.protocol import MESSAGES, VERSION, ErrorCode, ProtocolError, error, parse
 
 log = logging.getLogger(__name__)
+
+_REQUESTS = {name for name, (kind, _) in MESSAGES.items() if kind == "request"}
+_NOTIFICATIONS = {name for name, (kind, _) in MESSAGES.items() if kind == "notification"}
+PAIRING_TIMEOUT = 180.0  # seconds between pair_begin and pair_pin
+_UNTAGGED_ERROR_INTERVAL = 1.0  # at most one id-less error per code per second (media arrives at frame rate)
+
+
+class _Pairing:
+    def __init__(self) -> None:
+        self.pin: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self.asked = asyncio.Event()  # set once the receiver shows its PIN
+        self.task: asyncio.Task[None] | None = None
+
+    async def read_pin(self) -> str:
+        self.asked.set()
+        return await asyncio.wait_for(self.pin, PAIRING_TIMEOUT)
 
 
 class Host:
     def __init__(self, receivers: Receivers, writer: messaging.Writer) -> None:
         self._receivers = receivers
         self._writer = writer
+        self._mirroring = Mirroring(receivers, self._event)
+        self._pairings: dict[str, _Pairing] = {}
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._untagged_errors: dict[str, float] = {}
 
-    async def handle(self, payload: bytes) -> None:
-        """Answer one request. Never raises: every failure becomes an `error` message with a constant code."""
+    def receive(self, payload: bytes) -> asyncio.Task[None] | None:
+        """Handle one frame: media inline (keeps its order), requests as tasks. Never raises."""
         request_id: object = None
         try:
             raw = messaging.decode(payload)
             if isinstance(raw, dict):
                 request_id = cast(dict[str, object], raw).get("id")
-            request = parse(raw)
-            if request["type"] not in ("hello", "scan", "play", "control", "stop") or "host" in request:
+            message = parse(raw)
+            if message["type"] in _NOTIFICATIONS:
+                self._mirroring.media(message)
+                return None
+            if message["type"] not in _REQUESTS or "host" in message:
                 raise ProtocolError("unknown_type")  # a response or event sent our way
+        except ProtocolError as e:
+            self._refuse(e.code, request_id)
+            return None
+        except Exception:
+            log.exception("message failed")
+            self._refuse("internal_error", request_id)
+            return None
+        task = asyncio.create_task(self._answer(message))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
+    async def handle(self, payload: bytes) -> None:
+        """receive() and wait for the answer (for tests and one-off use)."""
+        task = self.receive(payload)
+        if task is not None:
+            await task
+
+    async def close(self) -> None:
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        for pairing in self._pairings.values():
+            if pairing.task is not None:
+                pairing.task.cancel()
+        await self._mirroring.close()
+
+    async def _answer(self, request: dict[str, object]) -> None:
+        try:
             response = await self._dispatch(request)
             self._writer.send({"v": VERSION, "id": request["id"], **response})
         except ProtocolError as e:
-            log.info("request refused: %s", e.code)
-            self._writer.send(error(e.code, request_id))
+            self._refuse(e.code, request["id"])
         except Exception:
             log.exception("request failed")
-            self._writer.send(error("internal_error", request_id))
+            self._refuse("internal_error", request["id"])
 
     async def _dispatch(self, request: dict[str, object]) -> dict[str, object]:
         match request["type"]:
@@ -55,14 +107,60 @@ class Host:
                 )
             case "stop":
                 await self._receivers.stop(cast(str, request["device"]))
+            case "pair_begin":
+                await self._pair_begin(cast(str, request["device"]))
+            case "pair_pin":
+                await self._pair_pin(cast(str, request["device"]), cast(str, request["pin"]))
+            case "mirror_start":
+                session = await self._mirroring.start(cast(str, request["device"]), audio="audio" in request)
+                return {"type": "mirror_started", "session": session}
+            case "mirror_stop":
+                await self._mirroring.stop(cast(str, request["session"]))
         return {"type": "ok"}
+
+    async def _pair_begin(self, device: str) -> None:
+        """Answer once the receiver shows its PIN (or pairing fails before that)."""
+        previous = self._pairings.pop(device, None)
+        if previous is not None and previous.task is not None:
+            previous.task.cancel()
+        pairing = _Pairing()
+        pairing.task = asyncio.create_task(self._receivers.pair(device, pairing.read_pin))
+        self._pairings[device] = pairing
+        asked = asyncio.create_task(pairing.asked.wait())
+        await asyncio.wait({asked, pairing.task}, return_when=asyncio.FIRST_COMPLETED)
+        asked.cancel()
+        if pairing.task.done() and not pairing.asked.is_set():
+            self._pairings.pop(device, None)
+            pairing.task.result()  # raises the receiver's refusal
+
+    async def _pair_pin(self, device: str, pin: str) -> None:
+        pairing = self._pairings.pop(device, None)
+        if pairing is None or pairing.task is None or not pairing.asked.is_set():
+            raise ProtocolError("pairing_failed")  # no pairing waiting for a PIN
+        pairing.pin.set_result(pin)
+        try:
+            await pairing.task
+        except TimeoutError as e:
+            raise ProtocolError("pairing_failed") from e
+
+    def _event(self, event: dict[str, object]) -> None:
+        self._writer.send({"v": VERSION, **event})
+
+    def _refuse(self, code: ErrorCode, request_id: object) -> None:
+        log.info("refused: %s", code)
+        if not isinstance(request_id, str):
+            # No id to answer (e.g. media): don't flood the extension at frame rate.
+            now = time.monotonic()
+            if now - self._untagged_errors.get(code, -_UNTAGGED_ERROR_INTERVAL) < _UNTAGGED_ERROR_INTERVAL:
+                return
+            self._untagged_errors[code] = now
+        self._writer.send(error(code, request_id))
 
 
 async def serve(receivers: Receivers, stdin: BinaryIO, stdout: BinaryIO) -> None:
     """Run until the browser closes the pipe."""
     writer = messaging.Writer(stdout)
     host = Host(receivers, writer)
-    tasks: set[asyncio.Task[None]] = set()
     try:
         while True:
             try:
@@ -73,12 +171,9 @@ async def serve(receivers: Receivers, stdin: BinaryIO, stdout: BinaryIO) -> None
                 break
             if payload is None:
                 break
-            task = asyncio.create_task(host.handle(payload))
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
+            host.receive(payload)
     except EOFError:
         log.warning("browser closed the pipe mid-message")
     finally:
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        await host.close()
         await receivers.close()

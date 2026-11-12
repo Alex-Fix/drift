@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { NativeClient, type PortLike } from "../src/background/native";
-import type { StatusEvent } from "../src/protocol";
+import type { HostEvent } from "../src/protocol";
 
 class FakePort implements PortLike {
   sent: unknown[] = [];
@@ -45,7 +45,7 @@ describe("NativeClient", () => {
 
   it("forwards status events", () => {
     const port = new FakePort();
-    const events: StatusEvent[] = [];
+    const events: HostEvent[] = [];
     const client = new NativeClient(
       () => port,
       (e) => events.push(e),
@@ -76,5 +76,36 @@ describe("NativeClient", () => {
     await expect(answer).rejects.toThrow("not running");
     void client.request({ type: "hello" });
     expect(opened).toHaveLength(2);
+  });
+
+  it("forwards mirror_status events", () => {
+    const port = new FakePort();
+    const events: HostEvent[] = [];
+    const client = new NativeClient(
+      () => port,
+      (e) => events.push(e),
+    );
+    void client.request({ type: "hello" });
+    const event = { v: 1, type: "mirror_status", session: "0".repeat(32), state: "stopped", reason: "mirror_failed" };
+    port.receive(event);
+    expect(events).toEqual([event]);
+  });
+
+  it("sends notifications without an id", () => {
+    const port = new FakePort();
+    const client = new NativeClient(() => port);
+    client.notify({ type: "audio", session: "0".repeat(32), ts: 0, data: "AAAA" });
+    expect(port.sent).toEqual([{ v: 1, type: "audio", session: "0".repeat(32), ts: 0, data: "AAAA" }]);
+  });
+
+  it("ignores id-less errors and messages only the extension sends", async () => {
+    const port = new FakePort();
+    const client = new NativeClient(() => port);
+    const answer = client.request({ type: "hello" });
+    port.receive({ v: 1, type: "error", code: "session_unknown" });
+    port.receive({ v: 1, type: "hello", id: "1" }); // a request echoed back is not our answer
+    port.receive({ v: 1, type: "audio", session: "0".repeat(32), ts: 0, data: "AAAA" });
+    port.receive({ v: 1, type: "ok", id: "1" });
+    await expect(answer).resolves.toEqual({ v: 1, type: "ok", id: "1" });
   });
 });

@@ -23,8 +23,12 @@ Contract: `docs/protocol.md`. Implementations: `extension/src/protocol.ts` (`MES
   a version bump — needs approval and a design-doc update.
 - **Closed shapes.** Unknown fields are rejected, never ignored. Every string has a max length, every number a range,
   every list a max size.
-- **Envelope.** Requests and their responses carry `id`; events never do; `error` may lack `id` when the request
-  couldn't be read.
+- **Envelope.** Requests and their responses carry `id`; events (host → extension) and notifications (extension →
+  host, no response) never do; `error` may lack `id` when the request couldn't be read or answers a notification.
+- **Spec kinds** (both validators): `str`, `num`, `oneOf`, `url`, `devices`, `pattern` (anchored, ≤ 256 chars),
+  `bool`, `base64` (decoded-size cap, padded, non-empty), `obj` (nested closed shape). Add a kind to both or neither.
 - **Errors** are snake_case constants from the shared list; no free-text from input.
-- **Sizes.** 1 MiB per message both ways; big payloads (media) never go over native messaging — they go through the
-  relay.
+- **Sizes.** Host → extension 1 MiB (Chrome's limit). Extension → host 3 MiB: mirroring media goes over native
+  messaging (Phase 0 spike step 5 measured 2× the 4K60 bitrate), in chunks of at most 2 MiB video / 256 KiB audio.
+  Anything bigger is split or doesn't belong on this channel. Oversized fixtures are built in test code, not
+  committed.

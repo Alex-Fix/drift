@@ -1,6 +1,6 @@
 import type { HostCall } from "../background/index";
 import { findCandidates, type Candidate } from "../content/candidates";
-import type { Request, Response, StatusEvent } from "../protocol";
+import type { HostEvent, Request, Response } from "../protocol";
 
 const devices = element("devices", HTMLSelectElement);
 const videos = element("videos", HTMLUListElement);
@@ -90,8 +90,8 @@ function show(value: unknown): void {
   status.textContent = value instanceof Error ? value.message : String(value);
 }
 
-chrome.runtime.onMessage.addListener((message: { kind?: string; event?: StatusEvent }) => {
-  if (message.kind === "status" && message.event) show(message.event.state);
+chrome.runtime.onMessage.addListener((message: { kind?: string; event?: HostEvent }) => {
+  if (message.kind === "event" && message.event) show(message.event.state);
 });
 element("rescan", HTMLButtonElement).addEventListener("click", () => {
   void scan();

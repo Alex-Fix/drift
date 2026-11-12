@@ -251,7 +251,16 @@ Branch `feat/airplay-mirroring`, one commit (or small PR) each:
    (uncompressed ALAC, ChaCha20-Poly1305 RTP, sync packets, resends from a 2 s backlog), audio stream in
    `MirrorSession(audio=True)`, `mirror-file --audio <wav>`; golden tests against spike bytes and pyatv's cipher;
    live: flash/beep clip in sync on the Samsung.
-5. Protocol: new messages on both sides, fixtures, `docs/protocol.md`.
+5. ~~Protocol: new messages on both sides, fixtures, `docs/protocol.md`.~~ Done 2026-11-12, with refinements from
+   building the host: separate `video`/`audio` notifications (closed shapes) instead of one `media`; the decoder
+   setup (`avcC`/`hvcC`) rides on keyframes as `video.config` instead of a `video` object in `mirror_start` (WebCodecs
+   reports it with the first chunk and on changes); `mirror_start.audio` is optional; timestamps are µs on the
+   capture clock, anchored to NTP by the host; new codes `mirror_unsupported`, `mirror_failed`, `session_unknown`,
+   `pairing_failed` (the extension-side `encoder_unavailable` / `capture_failed` stay local to the extension).
+   Host: `mirroring.py` (one session, media in arrival order, drop-until-keyframe), two-step pairing, Screen-feature
+   check. Extension → host limit raised to 3 MiB.
+   Live: a script in the extension's role streamed the flash/beep clip over real native messaging (`video`/`audio`
+   notifications) to the Samsung — smooth, in sync, 0 frames dropped.
 6. Extension: capture + WebCodecs encoding + quality ladder in the content script; media channel.
 7. Popup: mirror flow, pairing UI, status.
 8. Tab-capture fallback (offscreen document) for blank `captureStream()`.

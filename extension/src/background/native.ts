@@ -1,4 +1,13 @@
-import { parse, ProtocolError, VERSION, type Request, type Response, type StatusEvent } from "../protocol";
+import {
+  parse,
+  ProtocolError,
+  VERSION,
+  type HostEvent,
+  type Message,
+  type Notification,
+  type Request,
+  type Response,
+} from "../protocol";
 
 export const HOST_NAME = "io.github.alex_fix.drift";
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -19,7 +28,7 @@ interface Pending {
 
 /**
  * The native port to drift-host, opened lazily and reopened after the host exits. Requests are matched to responses
- * by `id`; `status` events go to `onStatus`.
+ * by `id`; events (`status`, `mirror_status`) go to `onEvent`; notifications (media) go out without an `id`.
  */
 export class NativeClient {
   private port: PortLike | undefined;
@@ -28,7 +37,7 @@ export class NativeClient {
 
   constructor(
     private readonly connect: () => PortLike,
-    private readonly onStatus: (event: StatusEvent) => void = () => undefined,
+    private readonly onEvent: (event: HostEvent) => void = () => undefined,
   ) {}
 
   request(request: Request): Promise<Response> {
@@ -42,6 +51,11 @@ export class NativeClient {
       this.pending.set(id, { resolve, reject, timer });
       port.postMessage({ v: VERSION, id, ...request });
     });
+  }
+
+  /** Fire-and-forget (media at frame rate): no id, no response; problems come back as events or id-less errors. */
+  notify(notification: Notification): void {
+    this.open().postMessage({ v: VERSION, ...notification });
   }
 
   private open(): PortLike {
@@ -71,14 +85,31 @@ export class NativeClient {
       console.warn("drift: dropped an invalid message from drift-host:", e.code);
       return;
     }
-    if (message.type === "status") {
-      this.onStatus(message);
+    if (message.type === "status" || message.type === "mirror_status") {
+      this.onEvent(message);
+    } else if (isResponse(message)) {
+      this.resolve(message);
+    } else {
+      console.warn("drift: dropped a message drift-host shouldn't send:", message.type);
+    }
+  }
+
+  private resolve(response: Response): void {
+    if (response.id === undefined) {
+      if (response.type === "error") console.warn("drift: drift-host reported:", response.code);
       return;
     }
-    const pending = message.id === undefined ? undefined : this.pending.get(message.id);
-    if (!pending || message.id === undefined) return;
+    const pending = this.pending.get(response.id);
+    if (!pending) return;
     clearTimeout(pending.timer);
-    this.pending.delete(message.id);
-    pending.resolve(message as Response);
+    this.pending.delete(response.id);
+    pending.resolve(response);
   }
+}
+
+const RESPONSES: ReadonlySet<string> = new Set(["devices", "ok", "error", "mirror_started"]);
+
+/** A response to one of our requests (`hello` only with the host's version; without it, it's a request). */
+function isResponse(message: Message): message is Response {
+  return RESPONSES.has(message.type) || (message.type === "hello" && "host" in message);
 }

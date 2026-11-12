@@ -1,8 +1,10 @@
 """Protocol v1 message validation. Mirrors extension/src/protocol.ts; contract in docs/protocol.md.
 
-Every message — request, response or event — is checked against MESSAGES. Unknown fields are rejected, never ignored.
+Every message — request, response, event or notification — is checked against MESSAGES. Unknown fields are rejected,
+never ignored.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Final, Literal, get_args
 from urllib.parse import urlsplit
@@ -19,6 +21,10 @@ type ErrorCode = Literal[
     "pairing_required",
     "device_unreachable",
     "internal_error",
+    "mirror_unsupported",
+    "mirror_failed",
+    "session_unknown",
+    "pairing_failed",
 ]
 
 
@@ -57,8 +63,29 @@ class Devices:
     max_items: int = 64
 
 
-type Spec = Str | Num | OneOf | Url | Devices
-type Kind = Literal["request", "response", "event"]
+@dataclass(frozen=True)
+class Pattern:
+    regex: str  # must match the whole string
+
+
+@dataclass(frozen=True)
+class Bool:
+    pass
+
+
+@dataclass(frozen=True)
+class Base64:
+    max_bytes: int  # decoded size
+
+
+@dataclass(frozen=True)
+class Obj:
+    fields: "dict[str, tuple[Spec, bool]]"
+
+
+type Spec = Str | Num | OneOf | Url | Devices | Pattern | Bool | Base64 | Obj
+# notification: extension → host, no id, no response (media at frame rate)
+type Kind = Literal["request", "response", "event", "notification"]
 
 ID = Str(64)
 DEVICE = Str(128)
@@ -67,6 +94,12 @@ URL_MAX = 8 * 1024
 POSITION = Num(0)
 STATES = OneOf(frozenset({"idle", "loading", "playing", "paused"}))
 ERROR_CODES = OneOf(frozenset(get_args(ErrorCode.__value__)))
+SESSION = Pattern(r"[0-9a-f]{32}")
+MEDIA_TS = Num(0, 2**53, integer=True)  # microseconds on the capture clock
+DIMENSION = Num(16, 8192, integer=True)
+VIDEO_CODECS = OneOf(frozenset({"h264", "hevc"}))
+MAX_VIDEO_CHUNK = 2 * 1024 * 1024
+MAX_AUDIO_CHUNK = 256 * 1024
 
 # type → (kind, {field: (spec, required)})
 MESSAGES: Final[dict[str, tuple[Kind, dict[str, tuple[Spec, bool]]]]] = {
@@ -86,10 +119,31 @@ MESSAGES: Final[dict[str, tuple[Kind, dict[str, tuple[Spec, bool]]]]] = {
         },
     ),
     "stop": ("request", {"device": (DEVICE, True)}),
+    "pair_begin": ("request", {"device": (DEVICE, True)}),
+    "pair_pin": ("request", {"device": (DEVICE, True), "pin": (Pattern(r"[0-9]{4,8}"), True)}),
+    "mirror_start": (
+        "request",
+        {
+            "device": (DEVICE, True),
+            # absent: video only. The only format the host takes is what it wraps as uncompressed ALAC.
+            "audio": (
+                Obj(
+                    {
+                        "format": (OneOf(frozenset({"pcm_s16"})), True),
+                        "rate": (Num(44100, 44100, integer=True), True),
+                        "channels": (Num(2, 2, integer=True), True),
+                    }
+                ),
+                False,
+            ),
+        },
+    ),
+    "mirror_stop": ("request", {"session": (SESSION, True)}),
     # responses
     "devices": ("response", {"devices": (Devices(), True)}),
     "ok": ("response", {}),
     "error": ("response", {"code": (ERROR_CODES, True)}),
+    "mirror_started": ("response", {"session": (SESSION, True)}),
     # events
     "status": (
         "event",
@@ -98,6 +152,48 @@ MESSAGES: Final[dict[str, tuple[Kind, dict[str, tuple[Spec, bool]]]]] = {
             "state": (STATES, True),
             "position": (POSITION, False),
             "duration": (POSITION, False),
+        },
+    ),
+    "mirror_status": (
+        "event",
+        {
+            "session": (SESSION, True),
+            "state": (OneOf(frozenset({"mirroring", "stopped"})), True),
+            "reason": (ERROR_CODES, False),
+            "codec": (VIDEO_CODECS, False),
+            "width": (DIMENSION, False),
+            "height": (DIMENSION, False),
+            "dropped": (Num(0, 2**53, integer=True), False),
+        },
+    ),
+    # notifications
+    "video": (
+        "notification",
+        {
+            "session": (SESSION, True),
+            "ts": (MEDIA_TS, True),
+            "key": (Bool(), True),
+            "data": (Base64(MAX_VIDEO_CHUNK), True),  # NAL units, each with a 4-byte big-endian length
+            # required with the first keyframe and whenever the decoder setup changes
+            "config": (
+                Obj(
+                    {
+                        "codec": (VIDEO_CODECS, True),
+                        "record": (Base64(64 * 1024), True),  # avcC / hvcC
+                        "width": (DIMENSION, True),
+                        "height": (DIMENSION, True),
+                    }
+                ),
+                False,
+            ),
+        },
+    ),
+    "audio": (
+        "notification",
+        {
+            "session": (SESSION, True),
+            "ts": (MEDIA_TS, True),
+            "data": (Base64(MAX_AUDIO_CHUNK), True),  # interleaved s16le stereo, 44.1 kHz
         },
     ),
 }
@@ -127,20 +223,12 @@ def parse(raw: object) -> dict[str, object]:
 
     if "id" in message:
         _check(ID, message["id"])
-        if kind == "event":
+        if kind in ("event", "notification"):
             raise ProtocolError("invalid_message")
     elif kind == "request" or (kind == "response" and kind_type != "error"):
         raise ProtocolError("invalid_message")
 
-    allowed = fields.keys() | {"v", "type", "id"}
-    if any(key not in allowed for key in message):
-        raise ProtocolError("invalid_message")
-    for name, (spec, required) in fields.items():
-        if name in message:
-            _check(spec, message[name])
-        elif required:
-            raise ProtocolError("invalid_message")
-
+    _check_fields(message, fields, extra={"v", "type", "id"})
     if kind_type == "control" and message["action"] == "seek" and "position" not in message:
         raise ProtocolError("invalid_message")
     return message
@@ -151,6 +239,20 @@ def error(code: ErrorCode, request_id: object = None) -> dict[str, object]:
     if isinstance(request_id, str) and 0 < len(request_id) <= ID.max_len:
         message["id"] = request_id
     return message
+
+
+def _check_fields(obj: dict[str, object], fields: dict[str, tuple[Spec, bool]], extra: set[str]) -> None:
+    allowed = fields.keys() | extra
+    if any(key not in allowed for key in obj):
+        raise ProtocolError("invalid_message")
+    for name, (spec, required) in fields.items():
+        if name in obj:
+            _check(spec, obj[name])
+        elif required:
+            raise ProtocolError("invalid_message")
+
+
+_BASE64 = re.compile(r"[A-Za-z0-9+/]*={0,2}")
 
 
 def _is_int(value: object) -> bool:
@@ -173,6 +275,26 @@ def _check(spec: Spec, value: object) -> None:
                 raise ProtocolError("invalid_message")
         case Url():
             _check_url(value)
+        case Pattern(regex):
+            if not isinstance(value, str) or len(value) > 256 or re.fullmatch(regex, value) is None:
+                raise ProtocolError("invalid_message")
+        case Bool():
+            if not isinstance(value, bool):
+                raise ProtocolError("invalid_message")
+        case Base64(max_bytes):
+            # Shape and size only (non-empty, padded, base64 alphabet); the host decodes when it uses the data.
+            if (
+                not isinstance(value, str)
+                or not value
+                or len(value) % 4
+                or len(value) > (max_bytes + 2) // 3 * 4
+                or _BASE64.fullmatch(value) is None
+            ):
+                raise ProtocolError("invalid_message")
+        case Obj(fields):
+            if not isinstance(value, dict):
+                raise ProtocolError("invalid_message")
+            _check_fields(value, fields, extra=set())
         case Devices(max_items):
             if not isinstance(value, list) or len(value) > max_items:
                 raise ProtocolError("invalid_message")
