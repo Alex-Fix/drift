@@ -91,6 +91,9 @@ async def _scan(listen: float) -> int:
 async def _pair(device: str) -> int:
     from drift_host.protocol import ProtocolError
 
+    if not sys.stdin.isatty():
+        print("pairing asks for the PIN shown on the receiver: run this in an interactive terminal", file=sys.stderr)
+        return 1
     receivers = PyatvReceivers(credentials_path())
     try:
         if device not in {d.id for d in await receivers.scan(5)}:
