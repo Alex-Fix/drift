@@ -48,10 +48,6 @@ strict = true
 python_version = "3.12"
 files = ["src", "tests"]
 
-[[tool.mypy.overrides]]
-module = ["pyatv", "pyatv.*"]
-ignore_missing_imports = true
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

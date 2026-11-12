@@ -81,14 +81,17 @@ Extension: Vitest (protocol validation against fixtures, candidate detection on 
 
 1. What did the earlier conversations settle? (receiver types, phases, Python vs a compiled host, naming)
 2. Receivers beyond Apple TV: AirPlay 2 TVs (Samsung, LG, Sony) support `play_url` inconsistently — in scope?
+   The first real scan (2026-11-12) found a Samsung UCU7000 (AirPlay 2 TV) and a Mac (macOS AirPlay receiver), no
+   Apple TV — so probably yes, and `play_url` on the Samsung must be verified before step 3 is designed around it.
 3. Packaging the host for non-developers: `uv tool install`, PyInstaller single binary, or an installer per OS?
 4. Do we need a fixed extension id (`key` in the manifest) before store publishing, for `allowed_origins`?
 5. YouTube & co: phase 3 tab capture, or special-case extractors (e.g. `yt-dlp` in the host)?
 
 ## Implementation steps
 
-1. Scaffolding, tooling, CI (this commit).
-2. Protocol v1 `hello`/`scan`/`devices` end to end; `drift-host install` for Chrome on all three OSes.
+1. Scaffolding, tooling, CI. ✓
+2. Protocol v1 `hello`/`scan`/`devices` end to end; `drift-host install` for Chrome on all three OSes. ✓ (stdio
+   round trip and a real LAN scan verified; Windows/Linux install covered by CI tests, not yet tried by hand)
 3. `play`/`stop`/`control`/`status` with URL hand-off; pairing flow.
 4. Candidate detection (DOM + `webRequest` manifests), DRM detection, popup UX.
 5. Relay (phase 2), then tab capture (phase 3) — each with its own design doc.

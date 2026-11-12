@@ -30,11 +30,14 @@ description: Conventions for drift-host (host/, Python ≥ 3.12, uv) — module 
 
 ## pyatv notes
 
-- `pyatv.scan(loop, timeout=…)` → configs; keep those with an AirPlay service. `pyatv.connect(config, loop)` →
+- pyatv is typed (`py.typed`): use `pyatv.interface.AppleTV` / `BaseConfig` under `TYPE_CHECKING`, not `Any`.
+- `pyatv.scan(loop, timeout=<int seconds>)` → configs; keep those with an `identifier` and an AirPlay service. `pyatv.connect(config, loop)` →
   `atv.stream.play_url(url, position=…)`, `atv.remote_control.{play,pause,set_position,stop}`, `atv.push_updater`
-  for status. `atv.close()` when done.
+  for status. `await asyncio.gather(*atv.close())` when done (close returns tasks).
+  pyatv exceptions map to codes in `_receiver_errors()` (auth → `pairing_required`, connection → `device_unreachable`).
 - tvOS may require AirPlay pairing depending on "Allow Access": `pyatv.pair(config, Protocol.AirPlay, loop)` → PIN on
-  screen → `credentials` stored per device (`security` skill: 0600, never logged).
+  screen → `credentials` stored per device (`security` skill: 0600, never logged); pyatv's
+  `pyatv.storage.file_storage.FileStorage(filename, loop)` can persist them (pass `storage=` to scan/connect/pair).
 - Try things without the browser: `uv run drift-host scan`, `uv run atvremote --id <id> play_url=<url>` (pyatv CLI).
 
 ## Native messaging per OS

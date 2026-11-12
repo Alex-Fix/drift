@@ -1,10 +1,16 @@
 """AirPlay receivers. The only module that imports pyatv; the rest of the host sees the Receivers protocol."""
 
 import asyncio
+import math
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from drift_host.protocol import ProtocolError
+
+if TYPE_CHECKING:
+    from pyatv.interface import AppleTV, BaseConfig
 
 
 @dataclass(frozen=True)
@@ -39,49 +45,55 @@ class PyatvReceivers:
     """Receivers over pyatv. Connections are kept per device for the life of the host process."""
 
     def __init__(self) -> None:
-        self._configs: dict[str, Any] = {}
-        self._connections: dict[str, Any] = {}
+        self._configs: dict[str, BaseConfig] = {}
+        self._connections: dict[str, AppleTV] = {}
 
     async def scan(self, listen: float) -> list[Device]:
         import pyatv
         from pyatv.const import Protocol as AtvProtocol
 
-        configs = await pyatv.scan(asyncio.get_running_loop(), timeout=listen)
+        # pyatv listens for whole seconds.
+        configs = await pyatv.scan(asyncio.get_running_loop(), timeout=max(1, math.ceil(listen)))
         devices = []
         for config in configs:
-            if config.get_service(AtvProtocol.AirPlay) is None:
+            if config.identifier is None or config.get_service(AtvProtocol.AirPlay) is None:
                 continue
             self._configs[config.identifier] = config
-            model = config.device_info.model_str if config.device_info else None
-            devices.append(Device(id=config.identifier, name=config.name, model=model))
+            devices.append(Device(id=config.identifier, name=config.name, model=config.device_info.model_str or None))
         return devices
 
     async def play(self, device: str, url: str, position: float | None) -> None:
         atv = await self._connect(device)
-        await atv.stream.play_url(url, **({"position": int(position)} if position else {}))
+        with _receiver_errors():
+            await atv.stream.play_url(url, **({"position": int(position)} if position else {}))
 
     async def control(self, device: str, action: Action, position: float | None) -> None:
         atv = await self._connect(device)
-        match action:
-            case "pause":
-                await atv.remote_control.pause()
-            case "resume":
-                await atv.remote_control.play()
-            case "seek":
-                await atv.remote_control.set_position(int(position or 0))
+        with _receiver_errors():
+            match action:
+                case "pause":
+                    await atv.remote_control.pause()
+                case "resume":
+                    await atv.remote_control.play()
+                case "seek":
+                    await atv.remote_control.set_position(int(position or 0))
 
     async def stop(self, device: str) -> None:
         atv = self._connections.pop(device, None)
         if atv is not None:
-            await atv.remote_control.stop()
-            atv.close()
+            try:
+                with _receiver_errors():
+                    await atv.remote_control.stop()
+            finally:
+                await asyncio.gather(*atv.close())
 
     async def close(self) -> None:
-        for atv in self._connections.values():
-            atv.close()
+        connections = list(self._connections.values())
         self._connections.clear()
+        for atv in connections:
+            await asyncio.gather(*atv.close())
 
-    async def _connect(self, device: str) -> Any:
+    async def _connect(self, device: str) -> AppleTV:
         if device in self._connections:
             return self._connections[device]
         config = self._configs.get(device)
@@ -90,9 +102,20 @@ class PyatvReceivers:
         import pyatv
 
         # TODO(pairing): load stored AirPlay credentials into config (design doc → "Pairing").
-        try:
+        with _receiver_errors():
             atv = await pyatv.connect(config, asyncio.get_running_loop())
-        except OSError as e:
-            raise ProtocolError("device_unreachable") from e
         self._connections[device] = atv
         return atv
+
+
+@contextmanager
+def _receiver_errors() -> Iterator[None]:
+    """pyatv failures as protocol codes; anything else stays an internal error."""
+    from pyatv import exceptions
+
+    try:
+        yield
+    except (exceptions.AuthenticationError, exceptions.NoCredentialsError, exceptions.InvalidCredentialsError) as e:
+        raise ProtocolError("pairing_required") from e
+    except (exceptions.ConnectionFailedError, exceptions.ConnectionLostError, OSError, TimeoutError) as e:
+        raise ProtocolError("device_unreachable") from e
