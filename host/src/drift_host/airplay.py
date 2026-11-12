@@ -2,15 +2,17 @@
 
 import asyncio
 import math
-from collections.abc import Iterator
+import sys
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from drift_host.protocol import ProtocolError
 
 if TYPE_CHECKING:
-    from pyatv.interface import AppleTV, BaseConfig
+    from pyatv.interface import AppleTV, BaseConfig, Storage
 
 
 @dataclass(frozen=True)
@@ -42,9 +44,15 @@ class Receivers(Protocol):
 
 
 class PyatvReceivers:
-    """Receivers over pyatv. Connections are kept per device for the life of the host process."""
+    """Receivers over pyatv. Connections are kept per device for the life of the host process.
 
-    def __init__(self) -> None:
+    Pairing credentials live in pyatv's file storage at `credentials` (the user data dir, owner-only); scan and
+    connect load them, so a paired receiver needs nothing else. Without a path they're kept in memory only.
+    """
+
+    def __init__(self, credentials: Path | None = None) -> None:
+        self._credentials = credentials
+        self._storage: Storage | None = None
         self._configs: dict[str, BaseConfig] = {}
         self._connections: dict[str, AppleTV] = {}
 
@@ -53,7 +61,8 @@ class PyatvReceivers:
         from pyatv.const import Protocol as AtvProtocol
 
         # pyatv listens for whole seconds.
-        configs = await pyatv.scan(asyncio.get_running_loop(), timeout=max(1, math.ceil(listen)))
+        storage = await self._load_storage()
+        configs = await pyatv.scan(asyncio.get_running_loop(), timeout=max(1, math.ceil(listen)), storage=storage)
         devices = []
         for config in configs:
             if config.identifier is None or config.get_service(AtvProtocol.AirPlay) is None:
@@ -101,11 +110,57 @@ class PyatvReceivers:
             raise ProtocolError("unknown_device")
         import pyatv
 
-        # TODO(pairing): load stored AirPlay credentials into config (design doc → "Pairing").
         with _receiver_errors():
-            atv = await pyatv.connect(config, asyncio.get_running_loop())
+            atv = await pyatv.connect(config, asyncio.get_running_loop(), storage=await self._load_storage())
         self._connections[device] = atv
         return atv
+
+    async def pair(self, device: str, read_pin: Callable[[], Awaitable[str]]) -> None:
+        """Pair with a receiver found by the last scan; the receiver shows a PIN that `read_pin` returns."""
+        import pyatv
+        from pyatv.const import Protocol as AtvProtocol
+
+        config = self._configs.get(device)
+        if config is None:
+            raise ProtocolError("unknown_device")
+        storage = await self._load_storage()
+        with _receiver_errors():
+            handler = await pyatv.pair(config, AtvProtocol.AirPlay, asyncio.get_running_loop(), storage=storage)
+        try:
+            with _receiver_errors():
+                await handler.begin()
+            pin = (await read_pin()).strip()
+            if not pin.isdecimal() or len(pin) > 8:
+                raise ValueError("the PIN is the digits shown on the receiver")
+            handler.pin(int(pin))
+            with _receiver_errors():
+                await handler.finish()
+            if not handler.has_paired:
+                raise ProtocolError("pairing_required")
+            await storage.save()
+            if self._credentials is not None and sys.platform != "win32":
+                self._credentials.chmod(0o600)
+        finally:
+            await handler.close()
+
+    async def _load_storage(self) -> Storage:
+        if self._storage is not None:
+            return self._storage
+        from pyatv.storage.file_storage import FileStorage
+        from pyatv.storage.memory_storage import MemoryStorage
+
+        if self._credentials is None:
+            self._storage = MemoryStorage()
+        else:
+            # Owner-only directory, so the file is private from the moment pyatv creates it (Windows: the per-user
+            # data dir is already ACL'd to the user).
+            self._credentials.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if sys.platform != "win32":
+                self._credentials.parent.chmod(0o700)
+            storage = FileStorage(str(self._credentials), asyncio.get_running_loop())
+            await storage.load()
+            self._storage = storage
+        return self._storage
 
 
 @contextmanager
@@ -115,7 +170,12 @@ def _receiver_errors() -> Iterator[None]:
 
     try:
         yield
-    except (exceptions.AuthenticationError, exceptions.NoCredentialsError, exceptions.InvalidCredentialsError) as e:
+    except (
+        exceptions.AuthenticationError,
+        exceptions.NoCredentialsError,
+        exceptions.InvalidCredentialsError,
+        exceptions.PairingError,
+    ) as e:
         raise ProtocolError("pairing_required") from e
     except (exceptions.ConnectionFailedError, exceptions.ConnectionLostError, OSError, TimeoutError) as e:
         raise ProtocolError("device_unreachable") from e

@@ -14,7 +14,7 @@ description: Conventions for drift-host (host/, Python ≥ 3.12, uv) — module 
 | `app.py` | `Host.handle` (one task per request, never raises), `serve` loop |
 | `airplay.py` | `Receivers` protocol + `PyatvReceivers`; the **only** module importing `pyatv` (imported lazily) |
 | `install.py` | `plan()` (pure, tested per OS) + `install()`/`uninstall()` — manifests, launcher, Windows registry |
-| `cli.py` | `drift-host chrome-extension://…` → serve; `scan`, `install`, `uninstall` for developers |
+| `cli.py` | `drift-host chrome-extension://…` → serve; `scan`, `pair`, `install`, `uninstall` for developers |
 
 ## Rules
 
@@ -38,6 +38,10 @@ description: Conventions for drift-host (host/, Python ≥ 3.12, uv) — module 
 - tvOS may require AirPlay pairing depending on "Allow Access": `pyatv.pair(config, Protocol.AirPlay, loop)` → PIN on
   screen → `credentials` stored per device (`security` skill: 0600, never logged); pyatv's
   `pyatv.storage.file_storage.FileStorage(filename, loop)` can persist them (pass `storage=` to scan/connect/pair).
+- `srptools` is pinned `<2` (pyatv passes `private` positionally, 2.0 made it keyword-only);
+  `tests/test_pyatv_compat.py` fails when that breaks again. Check it before accepting a Dependabot bump.
+- Credentials: `user_data_dir("drift")/receivers.json` (pyatv `FileStorage`, owner-only dir); `drift-host pair
+  --device <id>` writes them; the Samsung UCU7000 (AirPlay 2 TV) needs pairing before `play_url`.
 - Try things without the browser: `uv run drift-host scan`, `uv run atvremote --id <id> play_url=<url>` (pyatv CLI).
 
 ## Native messaging per OS

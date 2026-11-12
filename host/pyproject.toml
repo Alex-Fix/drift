@@ -9,6 +9,10 @@ requires-python = ">=3.12"
 dependencies = [
     "platformdirs>=4.3",
     "pyatv>=0.16",
+    # Not used directly: pyatv's AirPlay pairing passes `private` positionally to SRPClientSession, which srptools 2.0
+    # made keyword-only (pairing fails with "takes 2 positional arguments"). Lift when pyatv supports srptools 2;
+    # tests/test_pyatv_compat.py checks it.
+    "srptools>=1.0.1,<2",
 ]
 
 [project.scripts]
@@ -47,6 +51,11 @@ ignore = [
 strict = true
 python_version = "3.12"
 files = ["src", "tests"]
+
+# Calls pyatv internals (SRP handlers) that have no type hints.
+[[tool.mypy.overrides]]
+module = ["tests.test_pyatv_compat"]
+disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     scan = commands.add_parser("scan", help="list AirPlay receivers on the network")
     scan.add_argument("--timeout", type=float, default=3.0, help="seconds (default 3)")
+    pair = commands.add_parser("pair", help="pair with a receiver that asks for a PIN (stores the credentials)")
+    pair.add_argument("--device", required=True, help="receiver id, as listed by `drift-host scan`")
     for name in ("install", "uninstall"):
         command = commands.add_parser(name, help=f"{name} the native-messaging host for a browser")
         command.add_argument("--extension-id", required=True, help="the id shown on chrome://extensions")
@@ -36,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
     match parsed.command:
         case "scan":
             return asyncio.run(_scan(parsed.timeout))
+        case "pair":
+            return asyncio.run(_pair(parsed.device))
         case "install" | "uninstall":
             p = install.plan(
                 parsed.browser,
@@ -65,16 +69,39 @@ def _serve() -> int:
         filename=log_dir / "host.log", level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
     stdin, stdout = messaging.binary_stdio()
-    asyncio.run(app.serve(PyatvReceivers(), stdin, stdout))
+    asyncio.run(app.serve(PyatvReceivers(credentials_path()), stdin, stdout))
     return 0
 
 
+def credentials_path() -> Path:
+    return Path(platformdirs.user_data_dir(APP, appauthor=False)) / "receivers.json"
+
+
 async def _scan(listen: float) -> int:
-    receivers = PyatvReceivers()
+    receivers = PyatvReceivers(credentials_path())
     devices = await receivers.scan(listen)
     for device in devices:
         print(f"{device.id}\t{device.name}\t{device.model or ''}")
     if not devices:
         print("no AirPlay receivers found", file=sys.stderr)
     await receivers.close()
+    return 0
+
+
+async def _pair(device: str) -> int:
+    from drift_host.protocol import ProtocolError
+
+    receivers = PyatvReceivers(credentials_path())
+    try:
+        if device not in {d.id for d in await receivers.scan(5)}:
+            print(f"{device} not found — run `drift-host scan`", file=sys.stderr)
+            return 1
+        await receivers.pair(device, lambda: asyncio.to_thread(input, "PIN shown on the receiver: "))
+    except (ProtocolError, ValueError) as e:
+        # Developer command: pyatv's reason (e.g. a wrong PIN) is more useful here than the protocol code alone.
+        print(f"pairing failed: {e}" + (f" ({e.__cause__})" if e.__cause__ else ""), file=sys.stderr)
+        return 1
+    finally:
+        await receivers.close()
+    print(f"paired; credentials saved to {credentials_path()}")
     return 0
