@@ -1,6 +1,10 @@
 # Drift v1 — design
 Status: **draft** (not approved) · Date: 2026-11-12
 
+> **Superseded in part** by [`2026-11-12-airplay-mirroring-design.md`](2026-11-12-airplay-mirroring-design.md)
+> (approved): v1 is AirPlay mirroring of a page's `<video>`, because the target Samsung TV has no AirPlay URL
+> playback. The scaffolding, host/extension split and protocol conventions below still apply.
+
 Written while initialising the repository. The earlier discussions about drift weren't available here, so every
 decision below is a proposal: correct it, then run the `brainstorming` skill to turn this into an approved design.
 
