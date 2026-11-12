@@ -1,0 +1,2 @@
+# Follow `source "$(dirname "$0")/_common.sh"` in scripts/.
+source-path=SCRIPTDIR

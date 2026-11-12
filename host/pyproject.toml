@@ -1,0 +1,58 @@
+[project]
+name = "drift-host"
+version = "0.1.0"
+description = "Native-messaging host for the drift browser extension: discovers AirPlay receivers and streams to them."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Alex Papish" }]
+requires-python = ">=3.12"
+dependencies = [
+    "platformdirs>=4.3",
+    "pyatv>=0.16",
+]
+
+[project.scripts]
+drift-host = "drift_host.cli:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.11",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/drift_host"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "S", "PTH", "TID"]
+ignore = [
+    "S101", # assert is how pytest checks
+]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"subprocess.call".msg = "Use asyncio.create_subprocess_exec with an argument list (never a shell)."
+"os.system".msg = "Never run a shell."
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["pyatv", "pyatv.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
