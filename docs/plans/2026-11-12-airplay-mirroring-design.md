@@ -71,6 +71,32 @@ media channel from the start** (a listening port we may not need — kept as a p
 If 1 or 2 fails because FairPlay is required: **stop**, record the evidence here, and re-decide (reverse-engineered
 FairPlay — legal/maintenance risk; the TV's HLS video path; DLNA). Nothing is built on a guess.
 
+#### Spike log
+
+- **2026-11-12, step 1 (handshake): GO signal.** HAP pair-verify ok; `SETUP` with `isScreenMirroringSession`
+  (no `ekey`/`eiv`, no `fp-setup`) → 200 with `eventPort`, `timingPort`, `uiPreloaded`; event channel connects;
+  `SETUP` `streams: [{type: 110}]` with **no key** → 200 with a `dataPort`. The session then dropped within 2 s
+  (nothing connected to the data port); an immediate second session also dropped. Open: which key/cipher the TV
+  expects for the video stream under HAP (step 2), and the idle timeout.
+- **2026-11-12, step 2 (pixels): GO.** A 1080p30 H.264 test pattern (`drift H2`) showed on the Samsung over a
+  HAP-only mirroring session. What it took (wire format as documented by
+  [airmirror](https://github.com/sleechie/airmirror) `docs/PROTOCOL.md`, MIT, checked against the same AirTunes
+  377.40; implemented independently in the spike):
+  - SETUP 1 adds `updateSessionRequest: false`, `combinedGetInfoWithControlSetup: true`; the stream SETUP adds
+    `latencyMs: 90`, `shk` (32 random bytes), `shiv` (16).
+  - Data TCP connection opened **before** `RECORD`; heartbeat packet (type 2, option `1e 00`) every 1 s;
+    `POST /feedback` every 2 s.
+  - Codec packet: avcC record + trailer `02 00 00 00`, unencrypted.
+  - Video: AVCC access unit sealed with **ChaCha20-Poly1305**, key = HKDF-SHA512(pair-verify secret,
+    salt `DataStream-Salt<streamConnectionID>`, info `DataStream-Output-Encryption-Key`) — pyatv's
+    `verifier.encryption_keys(...)`; nonce = 4 zero bytes + LE64 frame counter; AAD = the 128-byte header;
+    length field includes the 16-byte tag.
+  - Failed first: plaintext (H0) and UxPlay's AES-CTR schedule keyed by `shk` (H1) — the TV entered mirroring but
+    showed no picture. AES-CTR is the FairPlay receivers' path only.
+  - Still open: TEARDOWN gets no answer (session ends when the connection closes); not yet tried: HEVC/4K (step 3,
+    the TV sets feature bit 42 — multi-codec screen — which suggests HEVC is accepted), audio (step 4), native
+    messaging throughput (step 5).
+
 ### User flow
 
 1. Open a page with a video, click drift.
