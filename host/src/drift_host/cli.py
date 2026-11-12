@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import logging
 import sys
+import time
 from pathlib import Path
 
 import platformdirs
@@ -29,6 +30,11 @@ def main(argv: list[str] | None = None) -> int:
     scan.add_argument("--timeout", type=float, default=3.0, help="seconds (default 3)")
     pair = commands.add_parser("pair", help="pair with a receiver that asks for a PIN (stores the credentials)")
     pair.add_argument("--device", required=True, help="receiver id, as listed by `drift-host scan`")
+    pair.add_argument(
+        "--pin-file",
+        type=Path,
+        help="wait for the PIN to be written to this file instead of prompting (no terminal needed; deleted after)",
+    )
     for name in ("install", "uninstall"):
         command = commands.add_parser(name, help=f"{name} the native-messaging host for a browser")
         command.add_argument("--extension-id", required=True, help="the id shown on chrome://extensions")
@@ -39,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         case "scan":
             return asyncio.run(_scan(parsed.timeout))
         case "pair":
-            return asyncio.run(_pair(parsed.device))
+            return asyncio.run(_pair(parsed.device, parsed.pin_file))
         case "install" | "uninstall":
             p = install.plan(
                 parsed.browser,
@@ -88,19 +94,24 @@ async def _scan(listen: float) -> int:
     return 0
 
 
-async def _pair(device: str) -> int:
+async def _pair(device: str, pin_file: Path | None) -> int:
     from drift_host.protocol import ProtocolError
 
-    if not sys.stdin.isatty():
-        print("pairing asks for the PIN shown on the receiver: run this in an interactive terminal", file=sys.stderr)
+    if pin_file is None and not sys.stdin.isatty():
+        print(
+            "pairing asks for the PIN shown on the receiver: run this in a terminal, or use --pin-file", file=sys.stderr
+        )
         return 1
     receivers = PyatvReceivers(credentials_path())
     try:
         if device not in {d.id for d in await receivers.scan(5)}:
             print(f"{device} not found — run `drift-host scan`", file=sys.stderr)
             return 1
-        await receivers.pair(device, lambda: asyncio.to_thread(input, "PIN shown on the receiver: "))
-    except (ProtocolError, ValueError) as e:
+        if pin_file is None:
+            await receivers.pair(device, lambda: asyncio.to_thread(input, "PIN shown on the receiver: "))
+        else:
+            await receivers.pair(device, lambda: asyncio.to_thread(_wait_for_pin, pin_file))
+    except (ProtocolError, ValueError, TimeoutError) as e:
         # Developer command: pyatv's reason (e.g. a wrong PIN) is more useful here than the protocol code alone.
         print(f"pairing failed: {e}" + (f" ({e.__cause__})" if e.__cause__ else ""), file=sys.stderr)
         return 1
@@ -108,3 +119,15 @@ async def _pair(device: str) -> int:
         await receivers.close()
     print(f"paired; credentials saved to {credentials_path()}")
     return 0
+
+
+def _wait_for_pin(path: Path, seconds: float = 180) -> str:
+    """Blocking (run in a thread): the PIN once something writes it to `path`, which is then deleted."""
+    print(f"waiting for the PIN shown on the receiver in {path}", flush=True)
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if path.exists() and (pin := path.read_text(encoding="utf-8").strip()):
+            path.unlink()
+            return pin
+        time.sleep(0.5)
+    raise TimeoutError("no PIN written in time")

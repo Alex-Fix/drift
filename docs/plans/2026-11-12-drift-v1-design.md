@@ -77,12 +77,27 @@ Extension: Vitest (protocol validation against fixtures, candidate detection on 
 (framing, validation against fixtures, install paths per OS with a fake home/registry, airplay adapter with a fake
 `pyatv`). Manual matrix: Apple TV 4K (tvOS current) × Chrome on macOS/Linux/Windows.
 
+## Receiver findings (2026-11-12)
+
+| Receiver | Pairing | `play_url` (approach 1) |
+|---|---|---|
+| Samsung UCU7000, AirPlay 2 TV (AirTunes 377.40) | ✓ HAP PIN | ✗ `POST /play` → 404; `setProperty` → 501, `/rate` → 404 |
+| Apple TV | — (none on the dev LAN) | expected ✓ (pyatv's primary target) |
+| macOS AirPlay receiver | not tried | not tried |
+
+Also learned from pyatv 0.18: `play_url` doesn't return until the media ends (the host must run it as a task and
+answer `play` once playback starts), and it serves a local file when the URL string is an existing path (drift only
+passes `http(s)` URLs with a host).
+
 ## Open questions
 
 1. What did the earlier conversations settle? (receiver types, phases, Python vs a compiled host, naming)
 2. Receivers beyond Apple TV: AirPlay 2 TVs (Samsung, LG, Sony) support `play_url` inconsistently — in scope?
    The first real scan (2026-11-12) found a Samsung UCU7000 (AirPlay 2 TV) and a Mac (macOS AirPlay receiver), no
    Apple TV — so probably yes, and `play_url` on the Samsung must be verified before step 3 is designed around it.
+   **Verified 2026-11-12:** the Samsung UCU7000 (AirTunes 377.40) pairs (HAP, PIN on screen) but answers
+   `POST /play` with 404 and pyatv's follow-up `PUT /setProperty?…` with 501: it has no URL playback. Approach 1
+   cannot work on it; see "Receiver findings".
 3. Packaging the host for non-developers: `uv tool install`, PyInstaller single binary, or an installer per OS?
 4. Do we need a fixed extension id (`key` in the manifest) before store publishing, for `allowed_origins`?
 5. YouTube & co: phase 3 tab capture, or special-case extractors (e.g. `yt-dlp` in the host)?

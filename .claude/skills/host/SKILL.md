@@ -42,6 +42,10 @@ description: Conventions for drift-host (host/, Python ≥ 3.12, uv) — module 
   `tests/test_pyatv_compat.py` fails when that breaks again. Check it before accepting a Dependabot bump.
 - Credentials: `user_data_dir("drift")/receivers.json` (pyatv `FileStorage`, owner-only dir); `drift-host pair
   --device <id>` writes them; the Samsung UCU7000 (AirPlay 2 TV) needs pairing before `play_url`.
+- `atv.stream.play_url` blocks until the media ends — run it as a task, never await it in a request handler. It
+  also serves a local file if the URL string is an existing path: only ever pass validated `http(s)` URLs.
+- Third-party AirPlay 2 TVs may not implement URL playback at all (Samsung UCU7000: `POST /play` → 404); see the
+  v1 design's "Receiver findings". `drift-host pair --pin-file <f>` pairs without a terminal (PIN written to `<f>`).
 - Try things without the browser: `uv run drift-host scan`, `uv run atvremote --id <id> play_url=<url>` (pyatv CLI).
 
 ## Native messaging per OS
