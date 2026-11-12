@@ -14,7 +14,8 @@ import logging
 import os
 import secrets
 import uuid
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from drift_host.mirror import packets
@@ -33,6 +34,11 @@ class Control(Protocol):
 
     @property
     def remote_ip(self) -> str: ...
+
+    @property
+    def local_ip(self) -> str:
+        """Our address on the interface facing the receiver (audio's UDP control socket binds here)."""
+        ...
 
     @property
     def timing_port(self) -> int: ...
@@ -61,6 +67,49 @@ class Timings:
     teardown: float = 2.0  # the Samsung never answers TEARDOWN; don't wait long for it
 
 
+@dataclass
+class AudioChannel:
+    """The realtime audio stream's UDP endpoints and key, set up with the session (spike step 4)."""
+
+    key: bytes  # `shk`: the ChaCha20-Poly1305 key for audio payloads
+    data: asyncio.DatagramTransport  # connected to the receiver's audio data port
+    control: asyncio.DatagramTransport  # bound locally; the receiver's control port is `receiver_control`
+    receiver_control: tuple[str, int]
+    on_control: Callable[[bytes], None] | None = field(default=None)  # e.g. retransmit requests
+
+    def send(self, packet: bytes) -> None:
+        self.data.sendto(packet)
+
+    def send_control(self, packet: bytes) -> None:
+        self.control.sendto(packet, self.receiver_control)
+
+
+class _ControlSocket(asyncio.DatagramProtocol):
+    def __init__(self) -> None:
+        self.channel: AudioChannel | None = None
+
+    def datagram_received(self, data: bytes, addr: tuple[str | object, int]) -> None:
+        if self.channel is not None and self.channel.on_control is not None:
+            self.channel.on_control(data)
+
+
+# Realtime audio stream values the spike verified in sync on the Samsung (uncompressed ALAC, 44.1 kHz stereo).
+AUDIO_SAMPLE_RATE = 44100
+AUDIO_FRAMES_PER_PACKET = 352
+AUDIO_LATENCY = 11025  # samples
+AUDIO_STREAM: dict[str, object] = {
+    "type": 96,
+    "ct": 2,
+    "audioFormat": 0x40000,
+    "spf": AUDIO_FRAMES_PER_PACKET,
+    "sr": AUDIO_SAMPLE_RATE,
+    "audioMode": "default",
+    "isMedia": True,
+    "latencyMin": AUDIO_LATENCY,
+    "latencyMax": 88200,
+    "supportsDynamicStreamID": False,
+}
+
 # Sender description the spike was verified with on the Samsung. Changing it needs a re-test on a receiver.
 SENDER: dict[str, object] = {
     "name": "drift",
@@ -75,8 +124,13 @@ TIMESTAMP_INFO = [{"name": name} for name in ("SubSu", "BePxT", "AfPxT", "BefEn"
 
 
 class MirrorSession:
-    def __init__(self, control: Control, *, latency_ms: int = 90, timings: Timings | None = None) -> None:
+    def __init__(
+        self, control: Control, *, audio: bool = False, latency_ms: int = 90, timings: Timings | None = None
+    ) -> None:
         self._control = control
+        self._with_audio = audio
+        self._audio: AudioChannel | None = None
+        self._udp: list[asyncio.DatagramTransport] = []
         self._latency_ms = latency_ms
         self._timings = timings or Timings()
         self._writer: asyncio.StreamWriter | None = None
@@ -91,6 +145,12 @@ class MirrorSession:
         if self._stream_key is None:
             raise RuntimeError("session not started")
         return self._stream_key
+
+    @property
+    def audio(self) -> AudioChannel:
+        if self._audio is None:
+            raise RuntimeError("session has no audio stream")
+        return self._audio
 
     @property
     def ended(self) -> asyncio.Event:
@@ -144,6 +204,8 @@ class MirrorSession:
             raise MirrorError("stream SETUP reply has no stream")
         data_port = _port(streams[0], "dataPort")
         self._stream_key = self._control.stream_key(stream_id)
+        if self._with_audio:
+            self._audio = await self._setup_audio()
 
         # The data connection must be open before RECORD (spike step 2).
         reader, self._writer = await asyncio.open_connection(self._control.remote_ip, data_port)
@@ -156,6 +218,36 @@ class MirrorSession:
             asyncio.create_task(self._feedback()),
         ]
         log.info("mirroring session started")
+
+    async def _setup_audio(self) -> AudioChannel:
+        loop = asyncio.get_running_loop()
+        control, socket = await loop.create_datagram_endpoint(_ControlSocket, local_addr=(self._control.local_ip, 0))
+        self._udp.append(control)
+        key = os.urandom(32)
+        reply = await self._control.request(
+            "SETUP",
+            body={
+                "streams": [
+                    {
+                        **AUDIO_STREAM,
+                        "controlPort": control.get_extra_info("sockname")[1],
+                        "shk": key,
+                        "streamConnectionID": secrets.randbits(63),
+                    }
+                ]
+            },
+        )
+        streams = _expect(reply, "audio stream SETUP").get("streams")
+        if not isinstance(streams, list) or not streams or not isinstance(streams[0], dict):
+            raise MirrorError("audio stream SETUP reply has no stream")
+        data_port, control_port = _port(streams[0], "dataPort"), _port(streams[0], "controlPort")
+        data, _ = await loop.create_datagram_endpoint(
+            asyncio.DatagramProtocol, remote_addr=(self._control.remote_ip, data_port)
+        )
+        self._udp.append(data)
+        channel = AudioChannel(key, data, control, (self._control.remote_ip, control_port))
+        socket.channel = channel
+        return channel
 
     async def send(self, packet: bytes) -> None:
         if self._writer is None or self._ended.is_set():
@@ -181,6 +273,8 @@ class MirrorSession:
                 await asyncio.wait_for(self._control.request("TEARDOWN"), self._timings.teardown)
             except (TimeoutError, OSError):
                 log.info("receiver did not answer TEARDOWN; closing anyway")
+        for transport in self._udp:
+            transport.close()
         if self._writer is not None:
             self._writer.close()
             with contextlib.suppress(OSError):

@@ -1,110 +1,12 @@
 import asyncio
 import contextlib
 import struct
-import sys
-from collections.abc import Callable
-from typing import Self
 
 import pytest
 
 from drift_host.mirror import packets
-from drift_host.mirror.session import MirrorError, MirrorSession, Reply, Timings
-
-FAST = Timings(heartbeat=0.02, feedback=0.03, teardown=0.1)
-
-
-class FakeTV:
-    """A receiver at the RTSP-message level plus a real TCP server for the mirroring data connection."""
-
-    def __init__(
-        self,
-        *,
-        refuse: str | None = None,
-        skip_record: bool = False,
-        answer_teardown: bool = False,
-        lose_connection_on: str | None = None,
-    ) -> None:
-        self.refuse = refuse
-        self.lose_connection_on = lose_connection_on
-        self.skip_record = skip_record
-        self.answer_teardown = answer_teardown
-        self.log: list[str] = []
-        self.requests: list[tuple[str, str | None, dict[str, object] | None]] = []
-        self.received = bytearray()
-        self.closed = False
-        self.events_port: int | None = None
-        self._server: asyncio.Server | None = None
-        self._data_writer: asyncio.StreamWriter | None = None
-        self.data_connected = asyncio.Event()
-        self.data_eof = asyncio.Event()
-
-    async def __aenter__(self) -> Self:
-        self._server = await asyncio.start_server(self._accept, "127.0.0.1", 0)
-        return self
-
-    async def __aexit__(self, *_: object) -> None:
-        # Never hang the suite on a failed test that left a connection open.
-        if self._data_writer:
-            self._data_writer.close()
-        assert self._server
-        self._server.close()
-        if sys.version_info >= (3, 13):
-            self._server.close_clients()
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(self._server.wait_closed(), 1)
-
-    async def _accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        self._data_writer = writer
-        self.data_connected.set()
-        while chunk := await reader.read(65536):
-            self.received += chunk
-        self.data_eof.set()
-
-    def drop_data_connection(self) -> None:
-        assert self._data_writer
-        self._data_writer.close()
-
-    # --- Control ---
-
-    remote_ip = "127.0.0.1"
-    timing_port = 49999
-
-    async def request(self, method: str, uri: str | None = None, body: dict[str, object] | None = None) -> Reply:
-        self.requests.append((method, uri, body))
-        streams = body.get("streams") if body else None
-        name = "stream SETUP" if streams else "session SETUP" if method == "SETUP" else method
-        if uri:
-            name += f" {uri}"
-        self.log.append(name)
-        if name == self.lose_connection_on:
-            raise ConnectionError("receiver connection lost")
-        if method == "RECORD":
-            # The accept callback runs asynchronously, so give an already-open connection a moment to show up; a
-            # connection drift only opens after RECORD returns would never appear here.
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self.data_connected.wait(), 0.5)
-            self.log.insert(-1, "data connected" if self.data_connected.is_set() else "no data connection")
-        if name == self.refuse:
-            return Reply(403, {})
-        if name == "session SETUP":
-            return Reply(200, {"eventPort": 50001, "timingPort": 50002, "skipRecord": self.skip_record})
-        if name == "stream SETUP":
-            assert self._server
-            port = self._server.sockets[0].getsockname()[1]
-            return Reply(200, {"streams": [{"type": 110, "dataPort": port}]})
-        if method == "TEARDOWN" and not self.answer_teardown:
-            await asyncio.sleep(3600)  # the Samsung never answers TEARDOWN
-        return Reply(200, {})
-
-    async def open_events(self, port: int) -> None:
-        self.events_port = port
-        self.log.append("events opened")
-
-    def stream_key(self, stream_connection_id: int) -> bytes:
-        return stream_connection_id.to_bytes(32, "big")
-
-    async def close(self) -> None:
-        self.closed = True
+from drift_host.mirror.session import MirrorError, MirrorSession, Timings
+from tests.fake_tv import FAST, FakeTV, eventually
 
 
 def stream_setup(tv: FakeTV) -> dict[str, object]:
@@ -113,14 +15,6 @@ def stream_setup(tv: FakeTV) -> dict[str, object]:
     assert isinstance(streams, list) and isinstance(streams[0], dict)
     stream: dict[str, object] = streams[0]
     return stream
-
-
-async def eventually(predicate: Callable[[], bool]) -> None:
-    for _ in range(200):  # up to ~2 s
-        if predicate():
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("condition not reached")
 
 
 async def test_start_follows_the_verified_handshake_order() -> None:
@@ -261,4 +155,46 @@ async def test_failing_feedback_does_not_end_the_session() -> None:
         await session.start()
         await eventually(lambda: tv.log.count("POST /feedback") >= 3)
         assert not session.ended.is_set()
+        await session.stop()
+
+
+async def test_audio_stream_is_set_up_after_video_and_before_the_data_connection() -> None:
+    async with FakeTV() as tv:
+        session = MirrorSession(tv, audio=True, timings=FAST)
+        await session.start()
+        assert tv.log[:6] == [
+            "session SETUP", "events opened", "stream SETUP", "audio SETUP", "data connected", "RECORD",
+        ]  # fmt: skip
+        await session.stop()
+
+
+async def test_audio_setup_asks_for_the_verified_realtime_stream() -> None:
+    async with FakeTV() as tv:
+        session = MirrorSession(tv, audio=True, timings=FAST)
+        await session.start()
+        body = next(b for m, _, b in tv.requests if b and "streams" in b and b["streams"][0]["type"] == 96)  # type: ignore[index]
+        stream = body["streams"][0]  # type: ignore[index]
+        assert {k: stream[k] for k in ("ct", "audioFormat", "spf", "sr", "latencyMin")} == {
+            "ct": 2, "audioFormat": 0x40000, "spf": 352, "sr": 44100, "latencyMin": 11025,
+        }  # fmt: skip
+        assert stream["shk"] == session.audio.key and len(session.audio.key) == 32
+        assert stream["controlPort"] == tv.sender_control_port
+        await session.stop()
+
+
+async def test_refused_audio_setup_fails_start() -> None:
+    async with FakeTV(refuse="audio SETUP") as tv:
+        session = MirrorSession(tv, audio=True, timings=FAST)
+        with pytest.raises(MirrorError, match="audio"):
+            await session.start()
+        assert tv.closed
+
+
+async def test_session_without_audio_has_no_audio_channel() -> None:
+    async with FakeTV() as tv:
+        session = MirrorSession(tv, timings=FAST)
+        await session.start()
+        assert "audio SETUP" not in tv.log
+        with pytest.raises(RuntimeError):
+            _ = session.audio
         await session.stop()

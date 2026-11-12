@@ -80,6 +80,10 @@ class PyatvControl:
         return self._connection.remote_ip
 
     @property
+    def local_ip(self) -> str:
+        return self._connection.local_ip
+
+    @property
     def timing_port(self) -> int:
         return self._timing_port
 

@@ -9,6 +9,7 @@ import asyncio
 import logging
 import sys
 import time
+import wave
 from pathlib import Path
 
 import platformdirs
@@ -40,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     mirror_file.add_argument("--device", required=True, help="receiver id, as listed by `drift-host scan`")
     mirror_file.add_argument("--loop", action="store_true", help="repeat the clip until interrupted")
+    mirror_file.add_argument(
+        "--audio", type=Path, help="WAV (16-bit stereo, 44.1 kHz) played alongside, cut or padded to the clip's length"
+    )
     mirror_file.add_argument("clip", type=Path)
     for name in ("install", "uninstall"):
         command = commands.add_parser(name, help=f"{name} the native-messaging host for a browser")
@@ -56,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
             logging.basicConfig(level=logging.INFO, format="%(message)s")
             logging.getLogger("pyatv").setLevel(logging.WARNING)
             try:
-                return asyncio.run(_mirror_file(parsed.device, parsed.clip, loop=parsed.loop))
+                return asyncio.run(_mirror_file(parsed.device, parsed.clip, audio=parsed.audio, loop=parsed.loop))
             except KeyboardInterrupt:
                 return 130
         case "install" | "uninstall":
@@ -146,21 +150,26 @@ def _wait_for_pin(path: Path, seconds: float = 180) -> str:
     raise TimeoutError("no PIN written in time")
 
 
-async def _mirror_file(device: str, path: Path, *, loop: bool) -> int:
+async def _mirror_file(device: str, path: Path, *, audio: Path | None, loop: bool) -> int:
     from drift_host.mirror import mp4
+    from drift_host.mirror.audio import AudioStream
     from drift_host.mirror.clock import ntp_after, ntp_now
-    from drift_host.mirror.session import MirrorError, MirrorSession
+    from drift_host.mirror.session import AUDIO_FRAMES_PER_PACKET, AUDIO_SAMPLE_RATE, MirrorError, MirrorSession
     from drift_host.mirror.video import VideoStream
     from drift_host.protocol import ProtocolError
 
     try:
         clip = mp4.read_clip(path)
-    except (OSError, mp4.ClipError) as e:
-        print(f"can't play {path}: {e}", file=sys.stderr)
+        pcm = _read_wav(audio) if audio else None
+    except (OSError, EOFError, mp4.ClipError, ValueError) as e:
+        print(f"can't play: {e}", file=sys.stderr)
         return 1
     duration = clip.samples[-1].time + (clip.samples[-1].time / max(1, len(clip.samples) - 1))
     config = clip.config
-    print(f"{path.name}: {config.codec} {config.width}x{config.height}, {len(clip.samples)} frames, {duration:.1f}s")
+    print(
+        f"{path.name}: {config.codec} {config.width}x{config.height}, {len(clip.samples)} frames, {duration:.1f}s"
+        + (f"; audio {audio.name}" if audio else "")
+    )
 
     receivers = PyatvReceivers(credentials_path())
     session: MirrorSession | None = None
@@ -168,15 +177,32 @@ async def _mirror_file(device: str, path: Path, *, loop: bool) -> int:
         if device not in {d.id for d in await receivers.scan(4)}:
             print(f"{device} not found — run `drift-host scan`", file=sys.stderr)
             return 1
-        session = MirrorSession(await receivers.open_mirror(device))
+        session = MirrorSession(await receivers.open_mirror(device), audio=pcm is not None)
         await session.start()
-        stream = VideoStream(session, clip.config)
-        start, ntp_start, offset = time.monotonic(), ntp_now(), 0.0
-        while True:
+        video = VideoStream(session, clip.config)
+        start, ntp_start = time.monotonic(), ntp_now()
+        sound = AudioStream(session, start=ntp_start) if pcm is not None else None
+
+        async def play_video(offset: float) -> None:
             for sample, data in zip(clip.samples, mp4.read_samples(path, clip.samples), strict=True):
                 at = offset + sample.time
                 await asyncio.sleep(max(0.0, start + at - time.monotonic()))
-                await stream.send(data, keyframe=sample.keyframe, timestamp=ntp_after(ntp_start, at))
+                await video.send(data, keyframe=sample.keyframe, timestamp=ntp_after(ntp_start, at))
+
+        async def play_audio(offset: float) -> None:
+            assert sound is not None and pcm is not None
+            # Frame counts are global so repeated loops don't drift by a partial packet each time.
+            first, end = round(offset * AUDIO_SAMPLE_RATE), round((offset + duration) * AUDIO_SAMPLE_RATE)
+            while sound.frames_sent < end:
+                at = sound.frames_sent / AUDIO_SAMPLE_RATE
+                await asyncio.sleep(max(0.0, start + at - time.monotonic()))
+                frame = sound.frames_sent - first
+                chunk = pcm[frame * 4 : (frame + AUDIO_FRAMES_PER_PACKET) * 4]
+                sound.send(chunk + bytes(AUDIO_FRAMES_PER_PACKET * 4 - len(chunk)))
+
+        offset = 0.0
+        while True:
+            await asyncio.gather(play_video(offset), *([play_audio(offset)] if sound else []))
             if not loop:
                 break
             offset += duration
@@ -189,3 +215,11 @@ async def _mirror_file(device: str, path: Path, *, loop: bool) -> int:
             await session.stop()
         await receivers.close()
     return 0
+
+
+def _read_wav(path: Path) -> bytes:
+    """Interleaved s16le stereo PCM at 44.1 kHz — the format the browser will send; no resampling here."""
+    with wave.open(str(path), "rb") as wav:
+        if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getcomptype()) != (2, 2, 44100, "NONE"):
+            raise ValueError(f"{path.name}: needs 16-bit stereo PCM at 44.1 kHz")
+        return wav.readframes(wav.getnframes())

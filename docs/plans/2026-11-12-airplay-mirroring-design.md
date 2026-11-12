@@ -247,7 +247,10 @@ Branch `feat/airplay-mirroring`, one commit (or small PR) each:
    after ~1 min it worked. The TV likely keeps the old session until its own timeout because it never answers
    TEARDOWN. Address before the popup flow (step 7): find a teardown it honours, or retry the connection with
    backoff and tell the user it's waiting.
-4. Host: audio + timing; the CLI clip plays with sound in sync.
+4. ~~Host: audio + timing; the CLI clip plays with sound in sync.~~ Done 2026-11-12: `mirror/audio.py`
+   (uncompressed ALAC, ChaCha20-Poly1305 RTP, sync packets, resends from a 2 s backlog), audio stream in
+   `MirrorSession(audio=True)`, `mirror-file --audio <wav>`; golden tests against spike bytes and pyatv's cipher;
+   live: flash/beep clip in sync on the Samsung.
 5. Protocol: new messages on both sides, fixtures, `docs/protocol.md`.
 6. Extension: capture + WebCodecs encoding + quality ladder in the content script; media channel.
 7. Popup: mirror flow, pairing UI, status.

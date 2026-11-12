@@ -17,6 +17,7 @@ description: Conventions for drift-host (host/, Python ≥ 3.12, uv) — module 
 | `mirror/pyatv_control.py` | `PyatvControl`: the real `Control` — pyatv **internals** (pair-verify, RTSP, timing, event channel) |
 | `mirror/packets.py` | data-channel packets: header (128 B, LE), heartbeat, codec packets (avcC + trailer / `hvc1` box), `FrameSealer` (ChaCha20-Poly1305) |
 | `mirror/video.py` | `VideoStream`: decoder setup before every keyframe, then sealed access units |
+| `mirror/audio.py` | `AudioStream`: s16le stereo 44.1 kHz PCM → uncompressed ALAC → sealed RTP; sync packets each second on the video clock; resends on request |
 | `mirror/clock.py` | NTP timestamps on the timing server's clock |
 | `mirror/mp4.py` | first video track of a plain MP4 (for `mirror-file`): avcC/hvcC + sample table; no B-frames |
 | `install.py` | `plan()` (pure, tested per OS) + `install()`/`uninstall()` — manifests, launcher, Windows registry |
