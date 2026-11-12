@@ -237,7 +237,8 @@ All within `"v": 1`; fixtures for each shape and each new rule.
 Branch `feat/airplay-mirroring`, one commit (or small PR) each:
 
 1. ~~Phase 0 spike; record go/no-go results in this doc.~~ Done 2026-11-12: GO on all five steps (spike log above).
-2. Host: `mirror/session.py` — RTSP screen-stream setup/teardown + fake-TV tests.
+2. ~~Host: `mirror/session.py` — RTSP screen-stream setup/teardown + fake-TV tests.~~ Done 2026-11-12: `mirror/session.py`,
+   `mirror/pyatv_control.py`; live check held a session 40 s (past the ~30 s keep-alive) and stopped in 2 s.
 3. Host: video framing + encryption with golden tests; `drift-host mirror-file <clip>` plays a pre-encoded clip.
 4. Host: audio + timing; the CLI clip plays with sound in sync.
 5. Protocol: new messages on both sides, fixtures, `docs/protocol.md`.

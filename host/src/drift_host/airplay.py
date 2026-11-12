@@ -14,6 +14,8 @@ from drift_host.protocol import ProtocolError
 if TYPE_CHECKING:
     from pyatv.interface import AppleTV, BaseConfig, Storage
 
+    from drift_host.mirror.pyatv_control import PyatvControl
+
 
 @dataclass(frozen=True)
 class Device:
@@ -114,6 +116,16 @@ class PyatvReceivers:
             atv = await pyatv.connect(config, asyncio.get_running_loop(), storage=await self._load_storage())
         self._connections[device] = atv
         return atv
+
+    async def open_mirror(self, device: str) -> PyatvControl:
+        """A pair-verified control channel for a mirroring session with a receiver found by the last scan."""
+        config = self._configs.get(device)
+        if config is None:
+            raise ProtocolError("unknown_device")
+        from drift_host.mirror.pyatv_control import PyatvControl
+
+        with _receiver_errors():
+            return await PyatvControl.connect(config)
 
     async def pair(self, device: str, read_pin: Callable[[], Awaitable[str]]) -> None:
         """Pair with a receiver found by the last scan; the receiver shows a PIN that `read_pin` returns."""

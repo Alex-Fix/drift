@@ -12,7 +12,10 @@ description: Conventions for drift-host (host/, Python ≥ 3.12, uv) — module 
 | `messaging.py` | stdio framing (32-bit native-endian length + UTF-8 JSON), size limits, binary stdio on Windows |
 | `protocol.py` | `MESSAGES` table, `parse`, `ProtocolError`, `error()` — mirrors `extension/src/protocol.ts` |
 | `app.py` | `Host.handle` (one task per request, never raises), `serve` loop |
-| `airplay.py` | `Receivers` protocol + `PyatvReceivers`; the **only** module importing `pyatv` (imported lazily) |
+| `airplay.py` | `Receivers` protocol + `PyatvReceivers` (scan, pair, URL playback, `open_mirror`); imports `pyatv` lazily |
+| `mirror/session.py` | `MirrorSession`: one mirroring session's lifecycle over a `Control` (no pyatv; tested with a fake TV) |
+| `mirror/pyatv_control.py` | `PyatvControl`: the real `Control` — pyatv **internals** (pair-verify, RTSP, timing, event channel) |
+| `mirror/packets.py` | data-channel packet headers (128 B, little-endian), heartbeat |
 | `install.py` | `plan()` (pure, tested per OS) + `install()`/`uninstall()` — manifests, launcher, Windows registry |
 | `cli.py` | `drift-host chrome-extension://…` → serve; `scan`, `pair`, `install`, `uninstall` for developers |
 
@@ -27,6 +30,11 @@ description: Conventions for drift-host (host/, Python ≥ 3.12, uv) — module 
 - Paths via `pathlib` + `platformdirs`; anything OS-specific has a branch for `darwin`, `linux` and `win32` and a
   test for each (CI runs all three).
 - New dependencies: free/OSS, added with `uv add`, lockfile committed.
+- `pyatv` is imported only in `airplay.py` and `mirror/pyatv_control.py`. The latter uses pyatv internals, so pyatv
+  is pinned to a minor version (`<0.19`); bumping it means updating `tests/test_pyatv_compat.py` and re-running a
+  live mirroring check on a receiver.
+- Mirroring protocol facts (handshake order, keys, packet formats) come from the Phase 0 spike log in
+  `docs/plans/2026-11-12-airplay-mirroring-design.md` — change them only with a live re-test.
 
 ## pyatv notes
 

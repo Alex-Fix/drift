@@ -582,7 +582,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "platformdirs", specifier = ">=4.3" },
-    { name = "pyatv", specifier = ">=0.16" },
+    { name = "pyatv", specifier = ">=0.18,<0.19" },
     { name = "srptools", specifier = ">=1.0.1,<2" },
 ]
 

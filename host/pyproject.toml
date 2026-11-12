@@ -8,7 +8,9 @@ authors = [{ name = "Alex Papish" }]
 requires-python = ">=3.12"
 dependencies = [
     "platformdirs>=4.3",
-    "pyatv>=0.16",
+    # Mirroring uses pyatv internals (no public mirroring API): pinned to a minor version; tests/test_pyatv_compat.py
+    # imports everything drift_host/mirror/pyatv_control.py relies on.
+    "pyatv>=0.18,<0.19",
     # Not used directly: pyatv's AirPlay pairing passes `private` positionally to SRPClientSession, which srptools 2.0
     # made keyword-only (pairing fails with "takes 2 positional arguments"). Lift when pyatv supports srptools 2;
     # tests/test_pyatv_compat.py checks it.

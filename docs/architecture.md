@@ -23,9 +23,12 @@
 - `messaging.py` — length-prefixed stdio framing with size limits. stdout is reserved for messages; logs go to a file.
 - `protocol.py` — message dataclasses, parse/validate, error codes.
 - `app.py` — dispatch loop: request → handler → response; one task per request so `scan` doesn't block `control`.
-- `airplay.py` — the only module importing `pyatv`: scan, connect (stored credentials), play/control/stop, push
+- `airplay.py` — pyatv entry point (with `mirror/pyatv_control.py`): scan, pair, connect (stored credentials), play/control/stop, push
   updates → `status` events.
-- `relay.py` — (phase 2) LAN HTTP server re-serving / remuxing streams.
+- `mirror/` — AirPlay 2 screen mirroring (`docs/plans/2026-11-12-airplay-mirroring-design.md`): `session.py` runs a
+  session's lifecycle over a `Control` interface, `pyatv_control.py` implements it with pyatv internals,
+  `packets.py` builds data-channel packets.
+- `relay.py` — (later, if needed) LAN HTTP server re-serving / remuxing streams.
 - `install.py` — writes the native-messaging host manifest + launcher for each OS and browser
   (macOS/Linux: JSON files in the browser's `NativeMessagingHosts` dir; Windows: manifest file + `HKCU` registry key).
 
