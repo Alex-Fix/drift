@@ -15,9 +15,12 @@ description: Conventions for drift-host (host/, Python ≥ 3.12, uv) — module 
 | `airplay.py` | `Receivers` protocol + `PyatvReceivers` (scan, pair, URL playback, `open_mirror`); imports `pyatv` lazily |
 | `mirror/session.py` | `MirrorSession`: one mirroring session's lifecycle over a `Control` (no pyatv; tested with a fake TV) |
 | `mirror/pyatv_control.py` | `PyatvControl`: the real `Control` — pyatv **internals** (pair-verify, RTSP, timing, event channel) |
-| `mirror/packets.py` | data-channel packet headers (128 B, little-endian), heartbeat |
+| `mirror/packets.py` | data-channel packets: header (128 B, LE), heartbeat, codec packets (avcC + trailer / `hvc1` box), `FrameSealer` (ChaCha20-Poly1305) |
+| `mirror/video.py` | `VideoStream`: decoder setup before every keyframe, then sealed access units |
+| `mirror/clock.py` | NTP timestamps on the timing server's clock |
+| `mirror/mp4.py` | first video track of a plain MP4 (for `mirror-file`): avcC/hvcC + sample table; no B-frames |
 | `install.py` | `plan()` (pure, tested per OS) + `install()`/`uninstall()` — manifests, launcher, Windows registry |
-| `cli.py` | `drift-host chrome-extension://…` → serve; `scan`, `pair`, `install`, `uninstall` for developers |
+| `cli.py` | `drift-host chrome-extension://…` → serve; `scan`, `pair`, `mirror-file`, `install`, `uninstall` for developers |
 
 ## Rules
 

@@ -34,3 +34,12 @@ def test_mirroring_internals_are_where_pyatv_control_expects_them() -> None:
     assert HttpResponse._fields == ("protocol", "version", "code", "message", "headers", "body")
     for function in (extract_credentials, verify_connection, timing_server, decode_bplist_from_body, http_connect):
         assert callable(function)
+
+
+def test_our_ntp_clock_matches_the_timing_server_clock() -> None:
+    # Video timestamps must be on the clock pyatv's timing server reports to the receiver.
+    from pyatv.protocols.raop.timing import ntp_now as pyatv_ntp_now
+
+    from drift_host.mirror.clock import ntp_now
+
+    assert abs(ntp_now() - pyatv_ntp_now()) < (1 << 32) // 100  # within 10 ms

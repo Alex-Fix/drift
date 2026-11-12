@@ -35,6 +35,12 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="wait for the PIN to be written to this file instead of prompting (no terminal needed; deleted after)",
     )
+    mirror_file = commands.add_parser(
+        "mirror-file", help="mirror a pre-encoded MP4 clip (H.264 or HEVC, no B-frames) to a receiver"
+    )
+    mirror_file.add_argument("--device", required=True, help="receiver id, as listed by `drift-host scan`")
+    mirror_file.add_argument("--loop", action="store_true", help="repeat the clip until interrupted")
+    mirror_file.add_argument("clip", type=Path)
     for name in ("install", "uninstall"):
         command = commands.add_parser(name, help=f"{name} the native-messaging host for a browser")
         command.add_argument("--extension-id", required=True, help="the id shown on chrome://extensions")
@@ -46,6 +52,13 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_scan(parsed.timeout))
         case "pair":
             return asyncio.run(_pair(parsed.device, parsed.pin_file))
+        case "mirror-file":
+            logging.basicConfig(level=logging.INFO, format="%(message)s")
+            logging.getLogger("pyatv").setLevel(logging.WARNING)
+            try:
+                return asyncio.run(_mirror_file(parsed.device, parsed.clip, loop=parsed.loop))
+            except KeyboardInterrupt:
+                return 130
         case "install" | "uninstall":
             p = install.plan(
                 parsed.browser,
@@ -131,3 +144,48 @@ def _wait_for_pin(path: Path, seconds: float = 180) -> str:
             return pin
         time.sleep(0.5)
     raise TimeoutError("no PIN written in time")
+
+
+async def _mirror_file(device: str, path: Path, *, loop: bool) -> int:
+    from drift_host.mirror import mp4
+    from drift_host.mirror.clock import ntp_after, ntp_now
+    from drift_host.mirror.session import MirrorError, MirrorSession
+    from drift_host.mirror.video import VideoStream
+    from drift_host.protocol import ProtocolError
+
+    try:
+        clip = mp4.read_clip(path)
+    except (OSError, mp4.ClipError) as e:
+        print(f"can't play {path}: {e}", file=sys.stderr)
+        return 1
+    duration = clip.samples[-1].time + (clip.samples[-1].time / max(1, len(clip.samples) - 1))
+    config = clip.config
+    print(f"{path.name}: {config.codec} {config.width}x{config.height}, {len(clip.samples)} frames, {duration:.1f}s")
+
+    receivers = PyatvReceivers(credentials_path())
+    session: MirrorSession | None = None
+    try:
+        if device not in {d.id for d in await receivers.scan(4)}:
+            print(f"{device} not found — run `drift-host scan`", file=sys.stderr)
+            return 1
+        session = MirrorSession(await receivers.open_mirror(device))
+        await session.start()
+        stream = VideoStream(session, clip.config)
+        start, ntp_start, offset = time.monotonic(), ntp_now(), 0.0
+        while True:
+            for sample, data in zip(clip.samples, mp4.read_samples(path, clip.samples), strict=True):
+                at = offset + sample.time
+                await asyncio.sleep(max(0.0, start + at - time.monotonic()))
+                await stream.send(data, keyframe=sample.keyframe, timestamp=ntp_after(ntp_start, at))
+            if not loop:
+                break
+            offset += duration
+        await asyncio.sleep(1)  # let the receiver show the last frames
+    except (ProtocolError, MirrorError, ConnectionError, mp4.ClipError) as e:
+        print(f"mirroring failed: {e}", file=sys.stderr)
+        return 1
+    finally:
+        if session is not None:
+            await session.stop()
+        await receivers.close()
+    return 0

@@ -7,6 +7,7 @@ license = "MIT"
 authors = [{ name = "Alex Papish" }]
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=44",
     "platformdirs>=4.3",
     # Mirroring uses pyatv internals (no public mirroring API): pinned to a minor version; tests/test_pyatv_compat.py
     # imports everything drift_host/mirror/pyatv_control.py relies on.

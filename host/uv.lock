@@ -566,6 +566,7 @@ name = "drift-host"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "platformdirs" },
     { name = "pyatv" },
     { name = "srptools" },
@@ -581,6 +582,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=44" },
     { name = "platformdirs", specifier = ">=4.3" },
     { name = "pyatv", specifier = ">=0.18,<0.19" },
     { name = "srptools", specifier = ">=1.0.1,<2" },

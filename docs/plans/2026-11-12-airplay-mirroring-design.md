@@ -239,7 +239,14 @@ Branch `feat/airplay-mirroring`, one commit (or small PR) each:
 1. ~~Phase 0 spike; record go/no-go results in this doc.~~ Done 2026-11-12: GO on all five steps (spike log above).
 2. ~~Host: `mirror/session.py` — RTSP screen-stream setup/teardown + fake-TV tests.~~ Done 2026-11-12: `mirror/session.py`,
    `mirror/pyatv_control.py`; live check held a session 40 s (past the ~30 s keep-alive) and stopped in 2 s.
-3. Host: video framing + encryption with golden tests; `drift-host mirror-file <clip>` plays a pre-encoded clip.
+3. ~~Host: video framing + encryption with golden tests; `drift-host mirror-file <clip>` plays a pre-encoded
+   clip.~~ Done 2026-11-12: `mirror/packets.py`, `video.py`, `clock.py`, `mp4.py`; golden tests against the
+   TV-verified spike bytes; live: H.264 1080p30 and HEVC 2160p60 clips played smoothly (HEVC with drift's own `hvc1`
+   box, no `btrt`).
+   **Known issue:** a new session started ~15 s after the previous one failed to connect (`device_unreachable`);
+   after ~1 min it worked. The TV likely keeps the old session until its own timeout because it never answers
+   TEARDOWN. Address before the popup flow (step 7): find a teardown it honours, or retry the connection with
+   backoff and tell the user it's waiting.
 4. Host: audio + timing; the CLI clip plays with sound in sync.
 5. Protocol: new messages on both sides, fixtures, `docs/protocol.md`.
 6. Extension: capture + WebCodecs encoding + quality ladder in the content script; media channel.
