@@ -130,6 +130,19 @@ FairPlay — legal/maintenance risk; the TV's HLS video path; DLNA). Nothing is 
     keep-alive timeout) — the soak test covers it.
   - **Design consequence:** no audio encoder anywhere — the browser sends raw PCM (resampled to 44.1 kHz stereo
     s16) and the host wraps it in uncompressed ALAC frames (~1.4 Mbit/s).
+- **2026-11-12, step 3 (HEVC 4K60): GO — crisp and smooth.** 12 s of 3840×2160@60 HEVC Main, level 5.1, from
+  VideoToolbox (hardware), no B-frames, keyframe every second. Nothing in SETUP announces HEVC: the receiver tells
+  the codecs apart by the codec packet alone.
+  - Codec packet: option bytes `1e 01`, size floats 3840/2160, payload = the MP4 **`hvc1` sample-entry box**
+    (VisualSampleEntry, 86 B, then the `hvcC` box; its VPS/SPS/PPS arrays start at payload offset `0x75`, where
+    UxPlay's receiver looks for them). **No** `02 00 00 00` trailer (unlike H.264). The spike lifted the box from an
+    in-memory MP4 rather than building `hvcC` by hand.
+  - Video packets: MP4 samples (4-byte length-prefixed NALs, SEI prefix before the IDR) sealed exactly as for H.264.
+  - Caveat: the simple pattern only needed ~1.2 Mbit/s, so this proves decode and display of 4K60, not bandwidth
+    (step 5 covers throughput; the soak test will cover real 4K content over the TV's network link).
+
+**Phase 0 result (2026-11-12): GO on all five steps.** No FairPlay; native messaging; H.264 up to 1080p60 and HEVC
+up to 4K60; uncompressed-ALAC audio in sync. Implementation starts at step 2.
 
 ### User flow
 
@@ -223,7 +236,7 @@ All within `"v": 1`; fixtures for each shape and each new rule.
 
 Branch `feat/airplay-mirroring`, one commit (or small PR) each:
 
-1. Phase 0 spike; record go/no-go results in this doc.
+1. ~~Phase 0 spike; record go/no-go results in this doc.~~ Done 2026-11-12: GO on all five steps (spike log above).
 2. Host: `mirror/session.py` — RTSP screen-stream setup/teardown + fake-TV tests.
 3. Host: video framing + encryption with golden tests; `drift-host mirror-file <clip>` plays a pre-encoded clip.
 4. Host: audio + timing; the CLI clip plays with sound in sync.
