@@ -110,6 +110,26 @@ FairPlay — legal/maintenance risk; the TV's HLS video path; DLNA). Nothing is 
   Consequence: base64 of a 4K keyframe costs up to ~12 ms on the sending thread — encoding and chunking run in a
   **worker**, never on the page's main thread. Not yet measured: the real path's extra hop (content script →
   service worker → host), Linux and Windows; re-check in the soak test.
+- **2026-11-12, step 4 (audio): GO — sound plays, in sync by eye and ear.** 30 s session: video (as step 2) plus a
+  1 s flash/beep pattern on a **type-96 realtime audio stream** in the same session. What it took (recipe notes:
+  [akustikrausch/airplay2-sender-cpp](https://github.com/akustikrausch/airplay2-sender-cpp) README, Apache-2.0;
+  implemented independently, reusing pyatv's RTP/sync packet and cipher classes):
+  - Stream SETUP `{type: 96, ct: 2, audioFormat: 0x40000, spf: 352, sr: 44100, latencyMin: 11025,
+    latencyMax: 88200, controlPort, shk: 32 random bytes, streamConnectionID}` → 200 with `dataPort`, `controlPort`
+    (UDP); sent after the video stream SETUP and before `RECORD`.
+  - **Uncompressed ALAC** frames (352 stereo 16-bit samples, 1412 B): MSB-first `3b CPE=1 · 4b 0 · 12b 0 · 1b 0 ·
+    2b 0 · 1b isNotCompressed=1 · samples · 3b END=7 · byte-align`.
+  - RTP header (12 B; `0xE0` marker on the first packet, then `0x60`; RTP time starts at a random offset and wraps
+    at 2³²) + payload sealed with ChaCha20-Poly1305 under `shk`, AAD = header bytes 4–12, then the 8-byte nonce.
+  - Sync packet (`0xD4`) to the TV's control port once a second mapping RTP time → NTP on the same clock as the
+    video timestamps; RTP `now − latency` in the first field.
+  - Event channel answered with a **bare** `200 OK` (`Server`, `CSeq` only): pyatv's `EventChannel` adds
+    `Content-Length: 0` and `Audio-Latency: 0`, which the notes report makes receivers render silence (not tried
+    with pyatv's reply on this TV).
+  - No retransmit requests from the TV. Not yet tested: sessions longer than ~30 s (reported event-channel
+    keep-alive timeout) — the soak test covers it.
+  - **Design consequence:** no audio encoder anywhere — the browser sends raw PCM (resampled to 44.1 kHz stereo
+    s16) and the host wraps it in uncompressed ALAC frames (~1.4 Mbit/s).
 
 ### User flow
 
@@ -124,7 +144,7 @@ FairPlay — legal/maintenance risk; the TV's HLS video path; DLNA). Nothing is 
 ### Architecture and data flow
 
 ```
-page <video> ── captureStream() ──► content script: VideoEncoder / AudioEncoder (WebCodecs)
+page <video> ── captureStream() ──► worker: VideoEncoder (WebCodecs) + raw PCM audio (44.1 kHz s16)
                                          │ encoded chunks (media channel, one-way, session-gated)
 popup ── control (start/stop/pair) ──► service worker ══ native messaging (WS fallback) ══► drift-host
                                                                                               │ mirror/
@@ -144,7 +164,8 @@ popup ── control (start/stop/pair) ──► service worker ══ native me
 Chosen at start via `VideoEncoder.isConfigSupported()`, hardware first:
 HEVC 2160p60 → HEVC 1440p60 → H.264 1080p60 → H.264 720p60 → H.264 720p30. Capped by the source's real size (no
 upscaling) and the TV's `/info` `displays` limits. If the encoder falls behind (growing queue), step down one rung
-mid-stream and tell the popup. Audio: AAC-LC 48 kHz stereo (spike confirms what the TV accepts).
+mid-stream and tell the popup. Audio: raw PCM from the browser, 44.1 kHz stereo s16, wrapped by the host in
+uncompressed ALAC on the type-96 stream (Phase 0 step 4) — no audio encoder.
 
 ### Error handling
 
@@ -158,7 +179,7 @@ New codes: `mirror_unsupported` (receiver lacks `Screen`), `encoder_unavailable`
 |---|---|---|
 | `pair_begin` → `ok` | popup → host | `device` |
 | `pair_pin` → `ok` | popup → host | `device`, `pin` (4–8 digits) |
-| `mirror_start` → `mirror_started` | popup → host | `device`, `video {codec, width, height, fps}`, `audio {codec, rate, channels}` → `session` (random, 128-bit) |
+| `mirror_start` → `mirror_started` | popup → host | `device`, `video {codec, width, height, fps}`, `audio {format: "pcm_s16", rate: 44100, channels: 2}` → `session` (random, 128-bit) |
 | `mirror_stop` → `ok` | popup → host | `session` |
 | `mirror_status` (event) | host → popup | `session`, `state`, `codec`, `width`, `height`, `fps`, `dropped` |
 | `media` (no response) | content script → host | `session`, `track` (`video`/`audio`), `ts`, `key`, `data` (base64, ≤ 2 MiB decoded) |
@@ -190,9 +211,10 @@ All within `"v": 1`; fixtures for each shape and each new rule.
 
 ## Open questions
 
-1. Does the TV accept HAP-keyed mirroring without FairPlay `fp-setup`? (Phase 0, steps 1–2.)
+1. ~~Does the TV accept HAP-keyed mirroring without FairPlay `fp-setup`?~~ Yes (Phase 0, steps 1–2).
 2. ~~Does native messaging sustain ≥ 1.5× the 4K60 bitrate?~~ Yes (Phase 0, step 5: 2× held, ~85× burst headroom).
-3. Which audio formats does the TV accept on the mirroring path (AAC-LC vs AAC-ELD)? (Phase 0, step 4.)
+3. ~~Which audio formats does the TV accept on the mirroring path?~~ Uncompressed ALAC on a type-96 stream, in
+   sync (Phase 0, step 4). Compressed codecs not needed.
 4. The TV sets `VideoHTTPLiveStreams` and reports an HLS-capable web engine: is there a newer AirPlay video path that
    would let it fetch HLS itself at full quality? Research item, not on the v1 path.
 5. HDR10 passthrough for HDR sources — after v1.
