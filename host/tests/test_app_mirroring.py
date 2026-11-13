@@ -199,3 +199,49 @@ def _packets(tv: FakeTV) -> list[tuple[int, int]]:
         out.append((kind, size))
         at += packets.HEADER_SIZE + size
     return out
+
+
+async def test_an_unreachable_receiver_is_retried_until_it_accepts(monkeypatch: pytest.MonkeyPatch) -> None:
+    from drift_host import mirroring
+    from drift_host.protocol import ProtocolError
+
+    monkeypatch.setattr(mirroring, "RETRY_DELAYS", (0.01,))
+    async with FakeTV(answer_teardown=True) as tv:
+        h = Harness(tv)
+        refusals = iter([True, True, False])
+        open_mirror = h.receivers.open_mirror
+
+        async def flaky(device: str):  # type: ignore[no-untyped-def]
+            if next(refusals):
+                raise ProtocolError("device_unreachable")
+            return await open_mirror(device)
+
+        monkeypatch.setattr(h.receivers, "open_mirror", flaky)
+        await h.start()
+        await h.host.close()
+
+
+async def test_retrying_gives_up_after_the_retry_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    from drift_host import mirroring
+    from drift_host.protocol import ProtocolError
+
+    monkeypatch.setattr(mirroring, "RETRY_DELAYS", (0.05,))
+    monkeypatch.setattr(mirroring, "RETRY_FOR", 0.2)
+    async with FakeTV() as tv:
+        h = Harness(tv)
+
+        async def unreachable(device: str):  # type: ignore[no-untyped-def]
+            raise ProtocolError("device_unreachable")
+
+        monkeypatch.setattr(h.receivers, "open_mirror", unreachable)
+        reply = await h.ask({"type": "mirror_start", "id": "m", "device": "AA:BB"})
+        assert reply == {"v": 1, "type": "error", "id": "m", "code": "device_unreachable"}
+        await h.host.close()
+
+
+async def test_a_refusal_is_not_retried() -> None:
+    async with FakeTV(refuse="session SETUP") as tv:
+        h = Harness(tv)
+        reply = await h.ask({"type": "mirror_start", "id": "m", "device": "AA:BB"})
+        assert reply["code"] == "mirror_failed"
+        assert tv.log.count("session SETUP") == 1

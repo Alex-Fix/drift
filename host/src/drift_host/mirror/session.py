@@ -269,10 +269,15 @@ class MirrorSession:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         if self._recording:
-            try:
-                await asyncio.wait_for(self._control.request("TEARDOWN"), self._timings.teardown)
-            except (TimeoutError, OSError):
-                log.info("receiver did not answer TEARDOWN; closing anyway")
+            # Stream first, then session: the Samsung answers the first and ignores the second, then needs ~10-17 s
+            # before it accepts a new session (Mirroring.start retries meanwhile).
+            bodies: tuple[dict[str, object] | None, ...] = ({"streams": [{"type": 110}]}, None)
+            for body in bodies:
+                try:
+                    await asyncio.wait_for(self._control.request("TEARDOWN", body=body), self._timings.teardown)
+                except (TimeoutError, OSError):
+                    log.info("receiver did not answer TEARDOWN; closing anyway")
+                    break
         for transport in self._udp:
             transport.close()
         if self._writer is not None:

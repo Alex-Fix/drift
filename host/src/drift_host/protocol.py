@@ -314,12 +314,15 @@ def _check_url(value: object) -> None:
 
 
 def _check_device(value: object) -> None:
-    if not isinstance(value, dict) or any(key not in ("id", "name", "model") for key in value):
+    if not isinstance(value, dict):
         raise ProtocolError("invalid_message")
-    device: dict[str, object] = value
-    if "id" not in device or "name" not in device:
-        raise ProtocolError("invalid_message")
-    _check(DEVICE, device["id"])
-    _check(NAME, device["name"])
-    if "model" in device:
-        _check(NAME, device["model"])
+    _check_fields(value, _DEVICE_FIELDS, extra=set())
+
+
+_DEVICE_FIELDS: dict[str, tuple[Spec, bool]] = {
+    "id": (DEVICE, True),
+    "name": (NAME, True),
+    "model": (NAME, False),
+    "mirror": (Bool(), False),  # absent: unknown (older host)
+    "paired": (Bool(), False),
+}

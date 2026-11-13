@@ -198,3 +198,11 @@ async def test_session_without_audio_has_no_audio_channel() -> None:
         with pytest.raises(RuntimeError):
             _ = session.audio
         await session.stop()
+
+
+async def test_stop_tears_down_the_stream_before_the_session() -> None:
+    async with FakeTV(answer_teardown=True) as tv:
+        session = MirrorSession(tv, timings=FAST)
+        await session.start()
+        await session.stop()
+        assert tv.log[-2:] == ["stream TEARDOWN", "TEARDOWN"]

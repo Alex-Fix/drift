@@ -17,7 +17,7 @@ class FakeReceivers:
         self.closed = False
 
     async def scan(self, listen: float) -> list[Device]:
-        return [Device("AA:BB", "Living Room", "Apple TV 4K")]
+        return [Device("AA:BB", "Living Room", "Apple TV 4K", mirror=True, paired=True)]
 
     async def play(self, device: str, url: str, position: float | None) -> None:
         if device != "AA:BB":
@@ -74,7 +74,7 @@ async def test_scan_lists_receivers() -> None:
         "v": 1,
         "type": "devices",
         "id": "2",
-        "devices": [{"id": "AA:BB", "name": "Living Room", "model": "Apple TV 4K"}],
+        "devices": [{"id": "AA:BB", "name": "Living Room", "model": "Apple TV 4K", "mirror": True, "paired": True}],
     }
 
 

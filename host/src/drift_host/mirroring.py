@@ -9,6 +9,7 @@ import asyncio
 import base64
 import binascii
 import contextlib
+import itertools
 import logging
 import secrets
 from collections.abc import Callable
@@ -26,6 +27,10 @@ from drift_host.protocol import ProtocolError
 log = logging.getLogger(__name__)
 
 QUEUE_SIZE = 240  # ~2 s of video plus audio at 60 fps
+# The Samsung refuses a new session for ~10-17 s after the previous one (it never answers the session TEARDOWN), so
+# an unreachable receiver is retried for a while; the extension waits RETRY_FOR + margin for mirror_start.
+RETRY_FOR = 30.0
+RETRY_DELAYS = (2.0, 3.0, 4.0, 5.0)  # then 5 s each
 
 
 @dataclass
@@ -59,20 +64,36 @@ class Mirroring:
         """Start mirroring to `device` (replacing any current session); returns the new session id."""
         if self._active is not None:
             await self._end(self._active, reason=None)
-        control = await self._receivers.open_mirror(device)
-        session = MirrorSession(control, audio=audio)
-        try:
-            await session.start()
-        except MirrorError as e:
-            log.info("receiver refused mirroring: %s", e)
-            raise ProtocolError("mirror_failed") from e
-        except OSError as e:
-            raise ProtocolError("device_unreachable") from e
+        session = await self._connect(device, audio=audio)
         active = _Active(secrets.token_hex(16), session)
         active.tasks = [asyncio.create_task(self._pump(active)), asyncio.create_task(self._watch(active))]
         self._active = active
         self._status(active, "mirroring")
         return active.id
+
+    async def _connect(self, device: str, *, audio: bool) -> MirrorSession:
+        """A started session; retries while the receiver is unreachable (e.g. still releasing the last session)."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + RETRY_FOR
+        for attempt in itertools.count():
+            try:
+                control = await self._receivers.open_mirror(device)
+                session = MirrorSession(control, audio=audio)
+                try:
+                    await session.start()
+                except OSError as e:
+                    raise ProtocolError("device_unreachable") from e
+                return session
+            except MirrorError as e:
+                log.info("receiver refused mirroring: %s", e)
+                raise ProtocolError("mirror_failed") from e
+            except ProtocolError as e:
+                delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+                if e.code != "device_unreachable" or loop.time() + delay > deadline:
+                    raise
+                log.info("receiver unreachable; retrying in %.0f s", delay)
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
 
     async def stop(self, session_id: str) -> None:
         active = self._current(session_id)

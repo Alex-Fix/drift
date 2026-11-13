@@ -99,7 +99,9 @@ class FakeTV:
         self.requests.append((method, uri, body))
         streams = body.get("streams") if body else None
         stream = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else None
-        if stream is not None:
+        if stream is not None and method == "TEARDOWN":
+            name = "stream TEARDOWN"
+        elif stream is not None:
             name = "audio SETUP" if stream.get("type") == 96 else "stream SETUP"
         else:
             name = "session SETUP" if method == "SETUP" else method
@@ -130,8 +132,8 @@ class FakeTV:
             assert self._server
             port = self._server.sockets[0].getsockname()[1]
             return Reply(200, {"streams": [{"type": 110, "dataPort": port}]})
-        if method == "TEARDOWN" and not self.answer_teardown:
-            await asyncio.sleep(3600)  # the Samsung never answers TEARDOWN
+        if name == "TEARDOWN" and not self.answer_teardown:
+            await asyncio.sleep(3600)  # the Samsung answers the stream TEARDOWN but never the session one
         return Reply(200, {})
 
     async def open_events(self, port: int) -> None:

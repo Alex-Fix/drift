@@ -23,9 +23,11 @@ class Device:
     id: str
     name: str
     model: str | None = None
+    mirror: bool = False  # can drift mirror to it (Screen + HomeKit pairing, no FairPlay)
+    paired: bool = False  # drift has pairing credentials for it
 
     def to_message(self) -> dict[str, object]:
-        message: dict[str, object] = {"id": self.id, "name": self.name}
+        message: dict[str, object] = {"id": self.id, "name": self.name, "mirror": self.mirror, "paired": self.paired}
         if self.model:
             message["model"] = self.model
         return message
@@ -72,10 +74,19 @@ class PyatvReceivers:
         configs = await pyatv.scan(asyncio.get_running_loop(), timeout=max(1, math.ceil(listen)), storage=storage)
         devices = []
         for config in configs:
-            if config.identifier is None or config.get_service(AtvProtocol.AirPlay) is None:
+            service = config.get_service(AtvProtocol.AirPlay)
+            if config.identifier is None or service is None:
                 continue
             self._configs[config.identifier] = config
-            devices.append(Device(id=config.identifier, name=config.name, model=config.device_info.model_str or None))
+            devices.append(
+                Device(
+                    id=config.identifier,
+                    name=config.name,
+                    model=config.device_info.model_str or None,
+                    mirror=supports_mirroring(service.properties.get("features")),
+                    paired=service.credentials is not None,  # loaded from storage by scan
+                )
+            )
         return devices
 
     async def play(self, device: str, url: str, position: float | None) -> None:

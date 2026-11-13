@@ -40,14 +40,14 @@ export class NativeClient {
     private readonly onEvent: (event: HostEvent) => void = () => undefined,
   ) {}
 
-  request(request: Request): Promise<Response> {
+  request(request: Request, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
     const id = String(this.nextId++);
     const port = this.open();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error("drift-host did not answer"));
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       port.postMessage({ v: VERSION, id, ...request });
     });

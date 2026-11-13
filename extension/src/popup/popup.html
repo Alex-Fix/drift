@@ -9,14 +9,45 @@
   <body>
     <header>
       <h1>drift</h1>
-      <select id="devices" aria-label="AirPlay receiver" disabled>
+      <button id="rescan" type="button" title="Search for receivers again" aria-label="Search again">↻</button>
+    </header>
+
+    <section id="receiver">
+      <label for="devices">AirPlay receiver</label>
+      <select id="devices" disabled>
         <option>Searching…</option>
       </select>
-      <button id="rescan" type="button" title="Search again">↻</button>
-    </header>
-    <main>
+      <div id="pairing" hidden>
+        <p id="pairing-text"></p>
+        <button id="pair-begin" type="button">Pair…</button>
+        <form id="pin-form" hidden>
+          <input
+            id="pin"
+            inputmode="numeric"
+            pattern="[0-9]{4,8}"
+            maxlength="8"
+            autocomplete="one-time-code"
+            placeholder="PIN"
+            aria-label="PIN shown on the TV"
+            required
+          />
+          <button type="submit">Pair</button>
+          <button id="pin-cancel" type="button" class="quiet">Cancel</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="mirroring" hidden>
+      <p id="mirror-title" class="title"></p>
+      <p id="mirror-detail" class="muted"></p>
+      <button id="stop" type="button">Stop mirroring</button>
+    </section>
+
+    <section>
+      <h2>Videos on this page</h2>
       <ul id="videos"></ul>
-    </main>
+    </section>
+
     <footer id="status" role="status"></footer>
   </body>
 </html>

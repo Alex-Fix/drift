@@ -10,6 +10,8 @@ import type { HostEvent } from "../protocol";
 import { MirrorSessions } from "./mirror";
 import { HOST_NAME, NativeClient } from "./native";
 
+// The host retries an unreachable receiver for up to 30 s (the Samsung needs ~10-17 s after the last session).
+const MIRROR_START_TIMEOUT_MS = 45_000;
 const sessions = new MirrorSessions();
 const infos = new Map<number, MirrorInfo>(); // per tab; kept after a stop so the popup can say why
 const frames = new Map<number, number>(); // tab → frame running the capture
@@ -48,7 +50,10 @@ chrome.runtime.onMessage.addListener((message: PopupCall, sender, sendResponse) 
 async function answer(call: PopupCall): Promise<object> {
   switch (call.kind) {
     case "host":
-      return { response: await client.request(call.request) };
+      // pair_begin waits for the receiver to show its PIN; pair_pin for pairing to finish.
+      return {
+        response: await client.request(call.request, call.request.type.startsWith("pair_") ? 30_000 : undefined),
+      };
     case "mirror":
       return { info: await startMirror(call.tabId, call.frameId, call.index, call.device) };
     case "mirror_stop":
@@ -91,11 +96,14 @@ async function startMirror(tabId: number, frameId: number, index: number, device
   await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["capture.js"] });
   const prepared = await toFrame<PrepareResult>(tabId, frameId, { kind: "drift-capture", action: "prepare", index });
   if (!prepared.ok) throw new Error(prepared.error);
-  const response = await client.request({
-    type: "mirror_start",
-    device,
-    ...(prepared.audio ? { audio: { format: "pcm_s16", rate: 44100, channels: 2 } as const } : {}),
-  });
+  const response = await client.request(
+    {
+      type: "mirror_start",
+      device,
+      ...(prepared.audio ? { audio: { format: "pcm_s16", rate: 44100, channels: 2 } as const } : {}),
+    },
+    MIRROR_START_TIMEOUT_MS,
+  );
   if (response.type === "error") throw new Error(response.code);
   if (response.type !== "mirror_started") throw new Error("unexpected answer from drift-host");
   sessions.bind(tabId, response.session);

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Stream the video on a page to an AirPlay receiver.",
   "minimum_chrome_version": "120",
-  "permissions": ["activeTab", "scripting", "nativeMessaging"],
+  "permissions": ["activeTab", "scripting", "nativeMessaging", "storage"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_title": "drift", "default_popup": "popup.html" },
   "content_security_policy": {

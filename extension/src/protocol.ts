@@ -22,6 +22,8 @@ export interface DeviceInfo {
   id: string;
   name: string;
   model?: string;
+  mirror?: boolean; // drift can mirror to it (absent: unknown)
+  paired?: boolean; // drift has pairing credentials for it
 }
 
 export type PlaybackState = "idle" | "loading" | "playing" | "paused";
@@ -328,11 +330,17 @@ export function checkUrl(value: unknown): void {
   }
 }
 
+const DEVICE_FIELDS: Fields = {
+  id: [DEVICE, true],
+  name: [NAME, true],
+  model: [NAME, false],
+  mirror: [{ kind: "bool" }, false],
+  paired: [{ kind: "bool" }, false],
+};
+
 function checkDevice(value: unknown): void {
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== "id" && key !== "name" && key !== "model")) fail();
-  check(DEVICE, value.id);
-  check(NAME, value.name);
-  if ("model" in value) check(NAME, value.model);
+  if (!isRecord(value)) fail();
+  checkFields(value, DEVICE_FIELDS, []);
 }
 
 function fail(): never {

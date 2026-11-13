@@ -272,7 +272,15 @@ Branch `feat/airplay-mirroring`, one commit (or small PR) each:
    sound in sync, the page's player smooth. Not yet measured: 4K keyframes on the page thread (soak test, step 9).
    Found: the popup offers receivers that can't mirror (the MacBook → `mirror_unsupported`); step 7 should mark
    them.
-7. Popup: mirror flow, pairing UI, status.
+7. ~~Popup: mirror flow, pairing UI, status.~~ Done 2026-11-13. Popup: receiver list (only mirror-capable ones
+   selectable, unpaired ones get **Pair…** with an inline PIN form; last choice remembered via the `storage`
+   permission), Mirror per video, a "Mirroring to …" panel with quality, sound and measured page cost, plain-language
+   errors (`popup/model.ts`, unit-tested). Protocol: `devices` entries gain optional `mirror` and `paired`.
+   **Known issue resolved:** a live experiment showed the Samsung answers a stream TEARDOWN (`streams: [{type: 110}]`)
+   but not the session TEARDOWN, and still needs ~10-17 s before it accepts a new session; drift now tears down the
+   stream first and `mirror_start` retries an unreachable receiver for up to 30 s (never a refusal), with the popup
+   explaining the wait. Live: paired from the popup with the TV's PIN, mirrored, stopped and mirrored again. Not seen
+   live: the retry path itself (the restart came after the TV had released the session); covered by tests.
 8. Tab-capture fallback (offscreen document) for blank `captureStream()`.
 9. Mid-stream step-down, 30-minute soak, README.
 10. ~~Localhost WebSocket media channel~~ — not needed (Phase 0 step 5: native messaging sustains 2× the 4K60 target).
