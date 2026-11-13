@@ -261,7 +261,17 @@ Branch `feat/airplay-mirroring`, one commit (or small PR) each:
    check. Extension → host limit raised to 3 MiB.
    Live: a script in the extension's role streamed the flash/beep clip over real native messaging (`video`/`audio`
    notifications) to the Samsung — smooth, in sync, 0 frames dropped.
-6. Extension: capture + WebCodecs encoding + quality ladder in the content script; media channel.
+6. ~~Extension: capture + WebCodecs encoding + quality ladder in the content script; media channel.~~ Done
+   2026-11-13. **Decision (user, 2026-11-13): base64 + messaging run on the page thread, measured** — a content
+   script can't start an extension worker (cross-origin), blob workers fail on strict-CSP sites, and
+   `chrome.runtime` messaging serialises on the page thread anyway; capture and encoding stay in the browser's media
+   threads. A blob worker gets added only if pages visibly stutter. Pieces: `capture/` (ladder, clock, PCM, base64),
+   `content/capture.ts` (captureStream → MediaStreamTrackProcessor → VideoEncoder; audio through a 44.1 kHz
+   AudioContext so the browser resamples), media port → background (`MirrorSessions` accepts media only from the
+   session's tab) → `notify`. Live on the Samsung from a local test page: 1080p30 H.264 + audio, 54 s, picture and
+   sound in sync, the page's player smooth. Not yet measured: 4K keyframes on the page thread (soak test, step 9).
+   Found: the popup offers receivers that can't mirror (the MacBook → `mirror_unsupported`); step 7 should mark
+   them.
 7. Popup: mirror flow, pairing UI, status.
 8. Tab-capture fallback (offscreen document) for blank `captureStream()`.
 9. Mid-stream step-down, 30-minute soak, README.

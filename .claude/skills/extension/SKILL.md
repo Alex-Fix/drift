@@ -14,6 +14,16 @@ description: Conventions for the drift Chromium extension (extension/, Manifest 
   `chrome.runtime.sendMessage({ kind: "host", request })`.
 - `src/content/candidates.ts` — `findCandidates`, injected with `chrome.scripting.executeScript({ func })`: it must
   stay self-contained (Chrome serialises its source) and return plain JSON.
+- `src/content/capture.ts` — injected on demand with `executeScript({ files: ["capture.js"] })` into the frame with
+  the chosen video, so it's bundled as an **IIFE** (classic script), not a module. Captures with `captureStream()`,
+  encodes with WebCodecs (`src/capture/ladder.ts` picks the rung), sends `video`/`audio` notifications over the
+  `drift-media` port. Runs on the page thread by decision (design doc, step 6): keep per-frame work small and
+  measured (`CaptureStats`).
+- `src/capture/` — pure helpers (ladder, clock, PCM, base64), unit-tested.
+- `src/messages.ts` — messages inside the extension (popup ⇄ background ⇄ content); `src/background/mirror.ts`
+  (`MirrorSessions`) is the gate for media: only valid `video`/`audio` for the sending tab's session.
+- `src/platform.d.ts` — Chrome APIs missing from TypeScript's DOM types (`MediaStreamTrackProcessor`,
+  `HTMLMediaElement.captureStream`, `Uint8Array.toBase64`).
 - `src/protocol.ts` — mirrors the host; see the `protocol` skill.
 
 ## Rules
@@ -23,7 +33,10 @@ description: Conventions for the drift Chromium extension (extension/, Manifest 
   top level.
 - **No runtime dependencies** without approval; no `eval`, `new Function`, remote scripts, `innerHTML` with page data.
 - **Permissions** are minimal (`activeTab`, `scripting`, `nativeMessaging` today). New ones → `security` skill.
-- The background only accepts messages from extension pages (`fromExtensionPage`).
+- The background only accepts **requests** from extension pages (`fromExtensionPage`); content scripts may only
+  open the `drift-media` port, and only for a tab with a running session.
+- Manual mirroring test: `artifacts/clips/test.html` served on `127.0.0.1` (the unpacked id from `extension/dist`
+  is `bcdfkknnkmjnopbhjollimphhhdnbeid` on this machine; Chrome derives it from the folder path).
 - Host name `io.github.alex_fix.drift` must match `host/src/drift_host/install.py`.
 
 ## Tooling

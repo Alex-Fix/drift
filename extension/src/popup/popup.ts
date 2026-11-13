@@ -1,6 +1,14 @@
-import type { HostCall } from "../background/index";
 import { findCandidates, type Candidate } from "../content/candidates";
+import type { MirrorInfo, PopupCall } from "../messages";
 import type { HostEvent, Request, Response } from "../protocol";
+
+/** A video in a frame of the active tab: where capture.js must be injected to mirror it. */
+interface Located {
+  tabId: number;
+  frameId: number;
+  index: number;
+  candidate: Candidate;
+}
 
 const devices = element("devices", HTMLSelectElement);
 const videos = element("videos", HTMLUListElement);
@@ -12,14 +20,18 @@ function element<T extends HTMLElement>(id: string, type: new () => T): T {
   return found;
 }
 
-type HostReply = { ok: true; response: Response } | { ok: false; error: string };
+type Reply<T> = ({ ok: true } & T) | { ok: false; error: string };
+
+async function background<T>(message: PopupCall): Promise<T> {
+  const reply = await chrome.runtime.sendMessage<PopupCall, Reply<T>>(message);
+  if (!reply.ok) throw new Error(reply.error.replaceAll("_", " "));
+  return reply;
+}
 
 async function call(request: Request): Promise<Response> {
-  const message: HostCall = { kind: "host", request };
-  const reply = await chrome.runtime.sendMessage<HostCall, HostReply>(message);
-  if (!reply.ok) throw new Error(reply.error);
-  if (reply.response.type === "error") throw new Error(reply.response.code.replaceAll("_", " "));
-  return reply.response;
+  const { response } = await background<{ response: Response }>({ kind: "host", request });
+  if (response.type === "error") throw new Error(response.code.replaceAll("_", " "));
+  return response;
 }
 
 async function scan(): Promise<void> {
@@ -37,61 +49,98 @@ async function scan(): Promise<void> {
   }
 }
 
-async function candidates(): Promise<Candidate[]> {
+async function activeTab(): Promise<number | undefined> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.id === undefined) return [];
-  const results = await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true },
-    func: findCandidates,
-  });
-  return results.flatMap((r) => r.result ?? []);
+  return tab?.id;
 }
 
-function render(list: Candidate[]): void {
+async function candidates(): Promise<Located[]> {
+  const tabId = await activeTab();
+  if (tabId === undefined) return [];
+  const results = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: findCandidates });
+  return results.flatMap((r) =>
+    (r.result ?? []).map((candidate, index) => ({ tabId, frameId: r.frameId, index, candidate })),
+  );
+}
+
+function render(list: Located[]): void {
   if (list.length === 0) {
     videos.replaceChildren(Object.assign(document.createElement("li"), { textContent: "No video on this page." }));
     return;
   }
   videos.replaceChildren(
-    ...list.map((candidate) => {
+    ...list.map((located) => {
+      const { candidate } = located;
       const item = document.createElement("li");
       const label = Object.assign(document.createElement("span"), { textContent: candidate.title });
-      const button = Object.assign(document.createElement("button"), { type: "button", textContent: "Play" });
-      if (candidate.drm || candidate.url === undefined) {
-        button.disabled = true;
-        button.title = candidate.drm ? "DRM-protected: not supported" : "Stream not reachable yet (needs the relay)";
+      const mirror = Object.assign(document.createElement("button"), { type: "button", textContent: "Mirror" });
+      if (candidate.drm) {
+        mirror.disabled = true;
+        mirror.title = "DRM-protected: not supported";
       }
-      button.addEventListener("click", () => {
-        void play(candidate);
+      mirror.addEventListener("click", () => {
+        void startMirror(located);
       });
-      item.append(label, button);
+      item.append(label, mirror);
       return item;
     }),
   );
 }
 
-async function play(candidate: Candidate): Promise<void> {
-  if (candidate.url === undefined || devices.disabled) return;
+async function startMirror(located: Located): Promise<void> {
+  if (devices.disabled) return;
+  show("Starting…");
   try {
-    await call({
-      type: "play",
-      device: devices.value,
-      url: candidate.url,
-      title: candidate.title,
-      position: candidate.position,
-    });
-    show("Playing");
+    const { tabId, frameId, index } = located;
+    await background({ kind: "mirror", tabId, frameId, index, device: devices.value });
+    await refresh();
   } catch (e) {
     show(e);
   }
 }
+
+/** Mirroring state of this tab (step 6: a status line with the measured page-thread cost; step 7 does the UX). */
+async function refresh(): Promise<void> {
+  const tabId = await activeTab();
+  if (tabId === undefined) return;
+  const { info } = await background<{ info?: MirrorInfo }>({ kind: "mirror_info", tabId });
+  stopButton.hidden = info === undefined || info.stopped !== undefined;
+  if (info === undefined) return;
+  const quality = `${info.codec.toUpperCase()} ${String(info.width)}x${String(info.height)}@${String(info.fps)}`;
+  if (info.stopped !== undefined) {
+    show(`Stopped (${info.stopped.replaceAll("_", " ")}) · ${quality}`);
+    return;
+  }
+  const s = info.stats;
+  show(
+    s === undefined
+      ? `Mirroring · ${quality}`
+      : `Mirroring · ${quality} · audio ${s.audio} · ${String(s.frames)} frames, ${String(s.droppedByEncoder)} skipped · ` +
+          `page thread ${String(s.sendAvgMs)} ms avg / ${String(s.sendMaxMs)} ms max per send · ` +
+          `${String(s.longTasks)} long tasks`,
+  );
+}
+
+const stopButton = Object.assign(document.createElement("button"), {
+  type: "button",
+  textContent: "Stop",
+  hidden: true,
+});
+stopButton.addEventListener("click", () => {
+  void activeTab().then(async (tabId) => {
+    if (tabId !== undefined) await background({ kind: "mirror_stop", tabId });
+    await refresh();
+  });
+});
+status.after(stopButton);
+setInterval(() => void refresh().catch(show), 1000);
 
 function show(value: unknown): void {
   status.textContent = value instanceof Error ? value.message : String(value);
 }
 
 chrome.runtime.onMessage.addListener((message: { kind?: string; event?: HostEvent }) => {
-  if (message.kind === "event" && message.event) show(message.event.state);
+  if (message.kind === "event" && message.event?.type === "mirror_status") void refresh();
 });
 element("rescan", HTMLButtonElement).addEventListener("click", () => {
   void scan();
@@ -99,3 +148,4 @@ element("rescan", HTMLButtonElement).addEventListener("click", () => {
 
 void scan();
 candidates().then(render, show);
+void refresh().catch(show);

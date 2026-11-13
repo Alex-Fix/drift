@@ -23,8 +23,11 @@ for (const file of ["manifest.json", "popup/popup.html", "popup/popup.css"]) {
   await cp(`src/${file}`, `dist/${file.split("/").at(-1)}`);
 }
 
+// Injected with executeScript({ files }), which runs classic scripts: bundled as an IIFE, not a module.
+const content = { ...options, entryPoints: { capture: "src/content/capture.ts" }, format: "iife" };
+
 if (watch) {
-  await (await context(options)).watch();
+  await Promise.all([options, content].map(async (o) => (await context(o)).watch()));
 } else {
-  await build(options);
+  await Promise.all([build(options), build(content)]);
 }
