@@ -19,7 +19,7 @@ description: Conventions for the drift Chromium extension (extension/, Manifest 
   encodes with WebCodecs (`src/capture/ladder.ts` picks the rung), sends `video`/`audio` notifications over the
   `drift-media` port. Runs on the page thread by decision (design doc, step 6): keep per-frame work small and
   measured (`CaptureStats`).
-- `src/capture/` — pure helpers (ladder, clock, PCM, base64, crop, sizing), unit-tested, and `pipeline.ts`: the
+- `src/capture/` — pure helpers (ladder, step-down, clock, PCM, base64, crop, sizing), unit-tested, and `pipeline.ts`: the
   capture → encode → send pipeline shared by both paths (crop per frame, reconfigure on size changes).
 - `src/offscreen/` — the tab-capture fallback: an offscreen document opened by the background with a
   `tabCapture` stream id, cropping the tab to the video's placement (reported by `capture.ts` in `track` mode).

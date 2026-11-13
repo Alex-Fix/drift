@@ -229,7 +229,8 @@ All within `"v": 1`; fixtures for each shape and each new rule.
 3. ~~Which audio formats does the TV accept on the mirroring path?~~ Uncompressed ALAC on a type-96 stream, in
    sync (Phase 0, step 4). Compressed codecs not needed.
 4. The TV sets `VideoHTTPLiveStreams` and reports an HLS-capable web engine: is there a newer AirPlay video path that
-   would let it fetch HLS itself at full quality? Research item, not on the v1 path.
+   would let it fetch HLS itself at full quality? Research item, not on the v1 path. **The user asked for it
+   (2026-11-13): next after step 9 — brainstorm, then a research spike with a go/no-go.**
 5. HDR10 passthrough for HDR sources — after v1.
 
 ## Implementation steps
@@ -299,5 +300,15 @@ Branch `feat/airplay-mirroring`, one commit (or small PR) each:
      capturing a muted element's sound.
    - Limitation: tab capture records everything drawn in the video's box, so overlays (native controls until they
      fade, a site's custom controls, captions) reach the receiver.
-9. Mid-stream step-down, 30-minute soak, README.
+9. ~~Mid-stream step-down, 30-minute soak, README.~~ Done 2026-11-13. Step-down (`capture/stepdown.ts`): the
+   pipeline lowers one rung when ≥ 15 % of frames are lost in 3 s (its own encoder queue, or the host's drops, which
+   the host now reports while they happen), with a 10 s cooldown; no stepping back up in v1. The host logs a stats
+   line every 30 s. README and architecture rewritten.
+   **Soak (Samsung, a real 4K YouTube video, page path), 2026-11-13, ~36 min:** HEVC 2560×1440 @ 60 fps for ~5 min,
+   then 3840×2160 @ 30 fps for 31.5 min (the resolution switch reconfigured the encoder live); 7–20 Mbit/s; **0
+   frames dropped**; host queue peak 18/240; audio steady at 10 chunks/s; the user saw picture and sound stay in sync
+   and the page play properly. Not exercised live: the step-down itself (nothing struggled; covered by tests); the
+   page-thread cost per frame at 4K wasn't read from the popup (no stutter observed).
+   Also seen live (step 7 leftover): the retry while the TV releases a previous session (18:54, "retrying in 3 s",
+   then started).
 10. ~~Localhost WebSocket media channel~~ — not needed (Phase 0 step 5: native messaging sustains 2× the 4K60 target).

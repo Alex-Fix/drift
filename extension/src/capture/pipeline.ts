@@ -5,7 +5,8 @@ import type { CaptureStats, StatsMessage } from "../messages";
 import type { Notification, VideoConfigMessage } from "../protocol";
 import { MediaClock } from "./clock";
 import type { Box } from "./crop";
-import { encoderConfig, type Choice } from "./ladder";
+import { describe, encoderConfig, stepDown, type Choice } from "./ladder";
+import { StepDownMonitor } from "./stepdown";
 import { FrameSizer } from "./sizing";
 import { base64, toS16Stereo } from "./pcm";
 
@@ -40,11 +41,17 @@ export class Pipeline {
     sendMaxMs: 0,
     longTasks: 0,
     audio: "off",
+    quality: "", // set from the choice in the constructor
+    stepDowns: 0,
   };
+  private readonly monitor = new StepDownMonitor();
+  private stepDownWanted = false;
   private sends = 0;
   private sendTotalMs = 0;
 
-  constructor(private readonly options: PipelineOptions) {}
+  constructor(private readonly options: PipelineOptions) {
+    this.stats.quality = describe(options.choice);
+  }
 
   start(): void {
     const { options } = this;
@@ -68,6 +75,12 @@ export class Pipeline {
     }
   }
 
+  /** Lower the quality at the next frame (e.g. the host is dropping frames: the receiver can't keep up). */
+  stepDown(): void {
+    this.stepDownWanted = true;
+    this.monitor.stepped(performance.now());
+  }
+
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
@@ -82,6 +95,7 @@ export class Pipeline {
 
   private async runVideo(track: MediaStreamTrack, initial: Choice): Promise<void> {
     let choice = initial;
+    this.stats.quality = describe(choice);
     const encoder = new VideoEncoder({
       output: (chunk, metadata) => {
         this.onChunk(chunk, metadata, choice);
@@ -112,11 +126,24 @@ export class Pipeline {
         frame.close();
         continue;
       }
+      const fps = choice.config.framerate ?? undefined;
       if (decision !== "encode") {
-        const fps = choice.config.framerate ?? undefined;
         choice = { rung: choice.rung, config: encoderConfig({ ...decision.reconfigure, fps }, choice.rung) };
         encoder.configure(choice.config);
         lastKeyframe = -Infinity; // a new configuration starts with a keyframe
+        this.stats.quality = describe(choice);
+      }
+      if (this.monitor.due(performance.now())) this.stepDownWanted = true;
+      if (this.stepDownWanted) {
+        this.stepDownWanted = false;
+        const lower = await stepDown({ ...size, fps }, choice.rung);
+        if (lower !== undefined) {
+          choice = lower;
+          encoder.configure(choice.config);
+          lastKeyframe = -Infinity;
+          this.stats.stepDowns++;
+          this.stats.quality = describe(choice);
+        }
       }
       if (size.width !== choice.config.width || size.height !== choice.config.height) {
         frame = await scaled(frame, choice.config); // bigger than the rung allows
@@ -124,8 +151,10 @@ export class Pipeline {
       if (encoder.encodeQueueSize > MAX_ENCODE_QUEUE) {
         frame.close();
         this.stats.droppedByEncoder++;
+        this.monitor.record(true, performance.now());
         continue;
       }
+      this.monitor.record(false, performance.now());
       const keyFrame = frame.timestamp - lastKeyframe >= KEYFRAME_INTERVAL_US;
       if (keyFrame) lastKeyframe = frame.timestamp;
       encoder.encode(frame, { keyFrame });

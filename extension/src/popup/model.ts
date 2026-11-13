@@ -58,7 +58,8 @@ export function explain(error: string): string {
 }
 
 export function mirrorSummary(info: MirrorInfo, receiver: string): { title: string; detail: string } {
-  const quality = `${info.codec === "hevc" ? "HEVC" : "H.264"} ${String(info.width)}×${String(info.height)} @ ${String(info.fps)} fps`;
+  const started = `${info.codec === "hevc" ? "HEVC" : "H.264"} ${String(info.width)}×${String(info.height)} @ ${String(info.fps)} fps`;
+  const quality = info.stats?.quality ?? started; // stats follow resizes and step-downs
   if (info.stopped !== undefined) {
     const why = info.stopped === "stopped" ? "" : ` (${explain(info.stopped)})`;
     return { title: `Stopped mirroring to ${receiver}${why}`, detail: quality };
@@ -72,6 +73,7 @@ function statsLine(stats: CaptureStats | undefined): string[] {
   const audio =
     stats.audio === "on" ? "with sound" : stats.audio === "off" ? "no sound on the page" : "sound unavailable";
   const parts = [audio];
+  if (stats.stepDowns > 0) parts.push(`quality lowered ${String(stats.stepDowns)}× to keep up`);
   if (stats.droppedByEncoder > 0) parts.push(`${String(stats.droppedByEncoder)} frames skipped`);
   parts.push(`page cost ${String(stats.sendAvgMs)} ms/frame (max ${String(stats.sendMaxMs)})`);
   if (stats.longTasks > 0) parts.push(`${String(stats.longTasks)} long tasks`);

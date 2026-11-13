@@ -2,7 +2,7 @@
 // to where the page says the video is, and runs the shared pipeline. Lives in an offscreen document, so none of this
 // runs on the page's thread. Tab capture mutes the tab, which is what we want: sound plays on the receiver only.
 import { cropRect, type Placement } from "../capture/crop";
-import { chooseVideoConfig } from "../capture/ladder";
+import { chooseVideoConfig, encoderSupports } from "../capture/ladder";
 import { Pipeline } from "../capture/pipeline";
 import { MEDIA_PORT, type OffscreenCommand, type OffscreenStarted } from "../messages";
 
@@ -37,7 +37,7 @@ async function start(command: Extract<OffscreenCommand, { action: "start" }>): P
   const tab = { width: settings.width, height: settings.height };
   const box = command.placement ? cropRect(command.placement, tab) : undefined;
   const size = box ?? tab;
-  const choice = await chooseVideoConfig({ ...size, fps: settings.frameRate }, isSupported);
+  const choice = await chooseVideoConfig({ ...size, fps: settings.frameRate }, encoderSupports);
   if (choice === undefined) {
     stopTracks(stream);
     return { ok: false, error: "encoder_unavailable" };
@@ -68,6 +68,7 @@ async function start(command: Extract<OffscreenCommand, { action: "start" }>): P
   };
   port.onMessage.addListener((message: { kind?: string }) => {
     if (message.kind === "stop") stop();
+    if (message.kind === "step_down") state.pipeline.stepDown();
   });
   port.onDisconnect.addListener(() => {
     stop();
@@ -95,14 +96,6 @@ function stop(): void {
 
 function stopTracks(stream: MediaStream): void {
   for (const track of stream.getTracks()) track.stop();
-}
-
-async function isSupported(config: VideoEncoderConfig): Promise<boolean> {
-  try {
-    return (await VideoEncoder.isConfigSupported(config)).supported === true;
-  } catch {
-    return false;
-  }
 }
 
 function isCommand(raw: unknown): raw is OffscreenCommand {

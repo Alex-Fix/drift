@@ -58,6 +58,30 @@ export function encoderConfig(source: Source, rung: Rung): VideoEncoderConfig {
   };
 }
 
+/** Whether this browser can encode `config` (false on any error). */
+export async function encoderSupports(config: VideoEncoderConfig): Promise<boolean> {
+  try {
+    return (await VideoEncoder.isConfigSupported(config)).supported === true;
+  } catch {
+    return false;
+  }
+}
+
+/** The next rung below `current` that can encode `source`, for a mid-stream step-down. */
+export async function stepDown(
+  source: Source,
+  current: Rung,
+  isSupported: (config: VideoEncoderConfig) => Promise<boolean> = encoderSupports,
+  ladder: readonly Rung[] = LADDER,
+): Promise<Choice | undefined> {
+  return chooseVideoConfig(source, isSupported, ladder.slice(ladder.indexOf(current) + 1));
+}
+
+export function describe(choice: Choice): string {
+  const { config, rung } = choice;
+  return `${rung.codec === "hevc" ? "HEVC" : "H.264"} ${String(config.width)}×${String(config.height)} @ ${String(config.framerate ?? 30)} fps`;
+}
+
 export async function chooseVideoConfig(
   source: Source,
   isSupported: (config: VideoEncoderConfig) => Promise<boolean>,

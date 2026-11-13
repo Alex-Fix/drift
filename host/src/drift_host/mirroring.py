@@ -31,6 +31,8 @@ QUEUE_SIZE = 240  # ~2 s of video plus audio at 60 fps
 # an unreachable receiver is retried for a while; the extension waits RETRY_FOR + margin for mirror_start.
 RETRY_FOR = 30.0
 RETRY_DELAYS = (2.0, 3.0, 4.0, 5.0)  # then 5 s each
+DROP_REPORT_INTERVAL = 2.0  # seconds between mirror_status updates while frames are being dropped
+STATS_INTERVAL = 30.0  # seconds between stats lines in the log (soak tests read them)
 
 
 @dataclass
@@ -46,6 +48,12 @@ class _Active:
     dropped: int = 0
     stopping: bool = False
     tasks: list[asyncio.Task[None]] = field(default_factory=list)
+    last_drop_report: float = 0.0
+    # since the last stats line
+    frames: int = 0
+    video_bytes: int = 0
+    audio_chunks: int = 0
+    queue_peak: int = 0
 
     def ntp(self, ts: int) -> int:
         if self.anchor is None:
@@ -66,7 +74,11 @@ class Mirroring:
             await self._end(self._active, reason=None)
         session = await self._connect(device, audio=audio)
         active = _Active(secrets.token_hex(16), session)
-        active.tasks = [asyncio.create_task(self._pump(active)), asyncio.create_task(self._watch(active))]
+        active.tasks = [
+            asyncio.create_task(self._pump(active)),
+            asyncio.create_task(self._watch(active)),
+            asyncio.create_task(self._log_stats(active)),
+        ]
         self._active = active
         self._status(active, "mirroring")
         return active.id
@@ -104,15 +116,24 @@ class Mirroring:
         active = self._current(cast(str, message["session"]))
         if message["type"] == "video":
             if active.need_keyframe and not message["key"]:
-                active.dropped += 1
+                self._dropped(active)
                 return
             active.need_keyframe = False
         try:
             active.queue.put_nowait(message)
+            active.queue_peak = max(active.queue_peak, active.queue.qsize())
         except asyncio.QueueFull:
-            active.dropped += 1
+            self._dropped(active)
             if message["type"] == "video":
                 active.need_keyframe = True
+
+    def _dropped(self, active: _Active) -> None:
+        """Count a drop and tell the extension (rate-limited): it lowers the quality when frames keep dropping."""
+        active.dropped += 1
+        now = asyncio.get_running_loop().time()
+        if now - active.last_drop_report >= DROP_REPORT_INTERVAL:
+            active.last_drop_report = now
+            self._status(active, "mirroring")
 
     async def close(self) -> None:
         if self._active is not None:
@@ -142,6 +163,7 @@ class Mirroring:
             if active.audio is None:
                 active.audio = AudioStream(active.session, start=timestamp)
             active.audio.send(data)
+            active.audio_chunks += 1
             return
         config = message.get("config")
         if isinstance(config, dict):
@@ -161,6 +183,25 @@ class Mirroring:
         if active.video is None:
             raise ValueError("video before its decoder setup")
         await active.video.send(data, keyframe=cast(bool, message["key"]), timestamp=timestamp)
+        active.frames += 1
+        active.video_bytes += len(data)
+
+    async def _log_stats(self, active: _Active) -> None:
+        """Every STATS_INTERVAL: what reached the receiver. Sizes and counts only (logging rules: no URLs, titles)."""
+        while True:
+            await asyncio.sleep(STATS_INTERVAL)
+            config = active.config
+            log.info(
+                "mirroring: %.1f fps, %.1f Mbit/s video%s, %d audio chunks, %d dropped in total, queue peak %d/%d",
+                active.frames / STATS_INTERVAL,
+                active.video_bytes * 8 / STATS_INTERVAL / 1e6,
+                f" ({config.codec} {config.width}x{config.height})" if config else "",
+                active.audio_chunks,
+                active.dropped,
+                active.queue_peak,
+                QUEUE_SIZE,
+            )
+            active.frames = active.video_bytes = active.audio_chunks = active.queue_peak = 0
 
     async def _watch(self, active: _Active) -> None:
         await active.session.ended.wait()

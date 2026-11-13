@@ -29,6 +29,8 @@ export interface CaptureStats {
   sendMaxMs: number;
   longTasks: number; // page tasks over 50 ms since mirroring started
   audio: "on" | "off" | "unavailable";
+  quality: string; // what's being encoded now, e.g. "H.264 1920×1080 @ 60 fps"
+  stepDowns: number; // times the quality was lowered mid-stream
 }
 
 /** Background → content script (chrome.tabs.sendMessage). */

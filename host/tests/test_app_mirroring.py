@@ -245,3 +245,36 @@ async def test_a_refusal_is_not_retried() -> None:
         reply = await h.ask({"type": "mirror_start", "id": "m", "device": "AA:BB"})
         assert reply["code"] == "mirror_failed"
         assert tv.log.count("session SETUP") == 1
+
+
+async def test_dropping_frames_is_reported_while_it_happens(monkeypatch: pytest.MonkeyPatch) -> None:
+    from drift_host import mirroring
+
+    monkeypatch.setattr(mirroring, "QUEUE_SIZE", 1)
+    async with FakeTV(answer_teardown=True) as tv:
+        h = Harness(tv)
+        session = await h.start()
+        before = len(h.of_type("mirror_status"))
+        for n in range(5):  # synchronously: the queue holds one, the rest drop
+            h.send(video(session, n, True, b"\x00\x00\x00\x01\x65", CONFIG))
+        reports = h.of_type("mirror_status")[before:]
+        assert len(reports) == 1  # rate-limited
+        assert reports[0]["state"] == "mirroring" and reports[0]["dropped"] == 1
+        await h.host.close()
+
+
+async def test_stats_are_logged_periodically(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from drift_host import mirroring
+
+    monkeypatch.setattr(mirroring, "STATS_INTERVAL", 0.05)
+    caplog.set_level(logging.INFO, logger="drift_host.mirroring")
+    async with FakeTV(answer_teardown=True) as tv:
+        h = Harness(tv)
+        session = await h.start()
+        h.send(video(session, 0, True, b"\x00\x00\x00\x02\x65\x01", CONFIG))
+        await eventually(lambda: any("fps" in r.message for r in caplog.records))
+        line = next(r.message for r in caplog.records if "fps" in r.message)
+        assert "h264 1920x1080" in line and "dropped" in line
+        await h.host.close()

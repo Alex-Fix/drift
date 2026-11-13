@@ -5,7 +5,7 @@
 // Fallback (implementation step 8): when captureStream() refuses (cross-origin media), the background captures the
 // whole tab in an offscreen document, and this script only reports where the video is on screen.
 import type { Placement } from "../capture/crop";
-import { chooseVideoConfig, type Choice } from "../capture/ladder";
+import { chooseVideoConfig, encoderSupports, type Choice } from "../capture/ladder";
 import { Pipeline } from "../capture/pipeline";
 import { MEDIA_PORT, type CaptureCommand, type PlacementMessage, type PrepareResult } from "../messages";
 
@@ -36,7 +36,7 @@ class Capture {
     const width = settings.width ?? video.videoWidth;
     const height = settings.height ?? video.videoHeight;
     if (!width || !height) return { ok: false, error: "capture_failed", placement: placementOf(video) };
-    this.choice = await chooseVideoConfig({ width, height, fps: settings.frameRate }, isSupported);
+    this.choice = await chooseVideoConfig({ width, height, fps: settings.frameRate }, encoderSupports);
     if (this.choice === undefined) return { ok: false, error: "encoder_unavailable" };
     const { config } = this.choice;
     return {
@@ -127,6 +127,7 @@ class Capture {
     this.port = port;
     port.onMessage.addListener((message: { kind?: string }) => {
       if (message.kind === "stop") this.stop();
+      if (message.kind === "step_down") this.pipeline?.stepDown();
     });
     port.onDisconnect.addListener(() => {
       this.stop();
@@ -141,14 +142,6 @@ class Capture {
     } catch {
       this.stop(); // the background went away
     }
-  }
-}
-
-async function isSupported(config: VideoEncoderConfig): Promise<boolean> {
-  try {
-    return (await VideoEncoder.isConfigSupported(config)).supported === true;
-  } catch {
-    return false;
   }
 }
 

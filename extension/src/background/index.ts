@@ -24,15 +24,25 @@ const OFFSCREEN_URL = "offscreen.html";
 let offscreenTab: number | undefined; // the tab the offscreen document is capturing (one fallback at a time)
 let offscreenPort: chrome.runtime.Port | undefined;
 const AUDIO = { format: "pcm_s16", rate: 44100, channels: 2 } as const;
+const hostDropped = new Map<string, number>(); // session → frames the host had dropped at its last status
 
 const client = new NativeClient(() => chrome.runtime.connectNative(HOST_NAME), onHostEvent);
 
 function onHostEvent(event: HostEvent): void {
   // The popup may be closed: nobody listening is fine.
   chrome.runtime.sendMessage({ kind: "event", event }).catch(() => undefined);
-  if (event.type === "mirror_status" && event.state === "stopped") {
-    const tabId = sessions.tabOf(event.session);
-    if (tabId !== undefined) void stopMirror(tabId, event.reason ?? "stopped");
+  if (event.type !== "mirror_status") return;
+  const tabId = sessions.tabOf(event.session);
+  if (tabId === undefined) return;
+  if (event.state === "stopped") {
+    void stopMirror(tabId, event.reason ?? "stopped");
+    return;
+  }
+  // The host drops frames when the receiver or network can't keep up: ask the capture to lower the quality.
+  const dropped = event.dropped ?? 0;
+  if (dropped > (hostDropped.get(event.session) ?? 0)) {
+    hostDropped.set(event.session, dropped);
+    (offscreenTab === tabId ? offscreenPort : mediaPorts.get(tabId))?.postMessage({ kind: "step_down" });
   }
 }
 

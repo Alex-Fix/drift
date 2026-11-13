@@ -57,7 +57,16 @@ describe("mirrorSummary", () => {
     const summary = mirrorSummary(
       {
         ...info,
-        stats: { frames: 600, droppedByEncoder: 2, sendAvgMs: 0.5, sendMaxMs: 7, longTasks: 0, audio: "on" },
+        stats: {
+          frames: 600,
+          droppedByEncoder: 2,
+          sendAvgMs: 0.5,
+          sendMaxMs: 7,
+          longTasks: 0,
+          audio: "on",
+          quality: "HEVC 3840×2160 @ 60 fps",
+          stepDowns: 0,
+        },
       },
       "Living Room",
     );
@@ -86,5 +95,32 @@ describe("mirrorSummary in tab-capture mode", () => {
       fps: 30,
     };
     expect(mirrorSummary(info, "TV").detail).toBe("H.264 1280×720 @ 30 fps · tab capture");
+  });
+});
+
+describe("mirrorSummary after a step-down", () => {
+  it("shows the current quality and that it was lowered", () => {
+    const info: MirrorInfo = {
+      session: "s",
+      device: "TV",
+      mode: "page",
+      codec: "hevc",
+      width: 3840,
+      height: 2160,
+      fps: 60,
+      stats: {
+        frames: 9000,
+        droppedByEncoder: 0,
+        sendAvgMs: 0.4,
+        sendMaxMs: 6,
+        longTasks: 0,
+        audio: "on",
+        quality: "H.264 1920×1080 @ 60 fps",
+        stepDowns: 1,
+      },
+    };
+    expect(mirrorSummary(info, "TV").detail).toBe(
+      "H.264 1920×1080 @ 60 fps · with sound · quality lowered 1× to keep up · page cost 0.4 ms/frame (max 6)",
+    );
   });
 });
