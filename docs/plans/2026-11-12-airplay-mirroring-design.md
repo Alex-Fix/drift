@@ -281,6 +281,23 @@ Branch `feat/airplay-mirroring`, one commit (or small PR) each:
    stream first and `mirror_start` retries an unreachable receiver for up to 30 s (never a refusal), with the popup
    explaining the wait. Live: paired from the popup with the TV's PIN, mirrored, stopped and mirrored again. Not seen
    live: the retry path itself (the restart came after the TV had released the session); covered by tests.
-8. Tab-capture fallback (offscreen document) for blank `captureStream()`.
+8. ~~Tab-capture fallback (offscreen document) for blank `captureStream()`.~~ Done 2026-11-13. `captureStream()`
+   throws for cross-origin media without CORS → the background starts the host session, then
+   `tabCapture.getMediaStreamId` (after `mirror_start`: stream ids are short-lived) → offscreen document
+   (`getUserMedia` on the tab) → shared `capture/pipeline.ts` with a per-frame crop; the page script only reports the
+   video's placement. DRM never falls back. New permissions: `tabCapture`, `offscreen`. Encoding in the fallback runs
+   off the page thread.
+   Live findings (Samsung, cross-origin test page):
+   - Tab capture keeps the tab's aspect ratio inside the requested frame (black bars), so page → frame coordinates use
+     one uniform scale plus a centring offset; with per-axis scales the crop slid onto the page (pink outline seen).
+   - A partly visible video would change the frame size every scroll step; the encoder needs a stable size, so the
+     receiver now holds the last full frame until the video is fully visible (`cropRect` → null). Real size changes
+     (fullscreen, resize, adaptive-stream resolution switches in the page path) reconfigure the encoder once the size
+     has held for 10 frames (`FrameSizer`); frames bigger than the rung allows are scaled explicitly.
+   - **Decision (user, 2026-11-13): sound plays on the receiver only**, like AirPlay. Tab capture leaves the tab
+     muted; the page path mutes the element while mirroring and restores it — verified that `captureStream()` keeps
+     capturing a muted element's sound.
+   - Limitation: tab capture records everything drawn in the video's box, so overlays (native controls until they
+     fade, a site's custom controls, captions) reach the receiver.
 9. Mid-stream step-down, 30-minute soak, README.
 10. ~~Localhost WebSocket media channel~~ — not needed (Phase 0 step 5: native messaging sustains 2× the 4K60 target).

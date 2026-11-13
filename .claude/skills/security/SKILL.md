@@ -42,7 +42,8 @@ same machine (it can talk to the host the same way the browser does).
 - Permissions: `activeTab` + `scripting` over broad host permissions; anything new is optional where possible and
   justified in the PR.
   Current set: `activeTab`, `scripting`, `nativeMessaging`, `storage` (only the last chosen receiver's id, in
-  `chrome.storage.local`: a convenience, nothing sensitive).
+  `chrome.storage.local`: a convenience, nothing sensitive), `tabCapture` + `offscreen` (the fallback: captures
+  only the tab the user mirrors, only after they click Mirror, cropped to the video, and never for DRM video).
 
 ### Host
 - Every message goes through `protocol.parse` before use; unknown fields/types/versions are errors. Frames over the

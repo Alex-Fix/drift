@@ -43,7 +43,15 @@ describe("explain", () => {
 });
 
 describe("mirrorSummary", () => {
-  const info: MirrorInfo = { session: "s", device: "TV", codec: "hevc", width: 3840, height: 2160, fps: 60 };
+  const info: MirrorInfo = {
+    session: "s",
+    device: "TV",
+    mode: "page",
+    codec: "hevc",
+    width: 3840,
+    height: 2160,
+    fps: 60,
+  };
 
   it("describes a running session with its quality and measured cost", () => {
     const summary = mirrorSummary(
@@ -63,5 +71,20 @@ describe("mirrorSummary", () => {
     expect(mirrorSummary({ ...info, stopped: "stopped" }, "TV").title).toBe("Stopped mirroring to TV");
     expect(mirrorSummary({ ...info, stopped: "mirror_failed" }, "TV").title).toMatch(/refused/);
     expect(mirrorSummary({ ...info, stopped: "capture_ended" }, "TV").title).toMatch(/stopped being captured/);
+  });
+});
+
+describe("mirrorSummary in tab-capture mode", () => {
+  it("says it's capturing the tab", () => {
+    const info: MirrorInfo = {
+      session: "s",
+      device: "TV",
+      mode: "tab",
+      codec: "h264",
+      width: 1280,
+      height: 720,
+      fps: 30,
+    };
+    expect(mirrorSummary(info, "TV").detail).toBe("H.264 1280×720 @ 30 fps · tab capture");
   });
 });

@@ -63,7 +63,8 @@ export function mirrorSummary(info: MirrorInfo, receiver: string): { title: stri
     const why = info.stopped === "stopped" ? "" : ` (${explain(info.stopped)})`;
     return { title: `Stopped mirroring to ${receiver}${why}`, detail: quality };
   }
-  return { title: `Mirroring to ${receiver}`, detail: [quality, ...statsLine(info.stats)].join(" · ") };
+  const mode = info.mode === "tab" ? ["tab capture"] : [];
+  return { title: `Mirroring to ${receiver}`, detail: [quality, ...mode, ...statsLine(info.stats)].join(" · ") };
 }
 
 function statsLine(stats: CaptureStats | undefined): string[] {

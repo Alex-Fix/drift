@@ -19,7 +19,12 @@ description: Conventions for the drift Chromium extension (extension/, Manifest 
   encodes with WebCodecs (`src/capture/ladder.ts` picks the rung), sends `video`/`audio` notifications over the
   `drift-media` port. Runs on the page thread by decision (design doc, step 6): keep per-frame work small and
   measured (`CaptureStats`).
-- `src/capture/` — pure helpers (ladder, clock, PCM, base64), unit-tested.
+- `src/capture/` — pure helpers (ladder, clock, PCM, base64, crop, sizing), unit-tested, and `pipeline.ts`: the
+  capture → encode → send pipeline shared by both paths (crop per frame, reconfigure on size changes).
+- `src/offscreen/` — the tab-capture fallback: an offscreen document opened by the background with a
+  `tabCapture` stream id, cropping the tab to the video's placement (reported by `capture.ts` in `track` mode).
+- While mirroring, sound plays on the receiver only (user decision): the page path mutes the element, tab capture
+  leaves the tab muted.
 - `src/messages.ts` — messages inside the extension (popup ⇄ background ⇄ content); `src/background/mirror.ts`
   (`MirrorSessions`) is the gate for media: only valid `video`/`audio` for the sending tab's session.
 - `src/platform.d.ts` — Chrome APIs missing from TypeScript's DOM types (`MediaStreamTrackProcessor`,
@@ -32,7 +37,8 @@ description: Conventions for the drift Chromium extension (extension/, Manifest 
   the port and pending requests; session state lives in the host. Event listeners are registered synchronously at
   top level.
 - **No runtime dependencies** without approval; no `eval`, `new Function`, remote scripts, `innerHTML` with page data.
-- **Permissions** are minimal (`activeTab`, `scripting`, `nativeMessaging` today). New ones → `security` skill.
+- **Permissions** are minimal: `activeTab`, `scripting`, `nativeMessaging`, `storage`, `tabCapture`, `offscreen`.
+  New ones → `security` skill.
 - The background only accepts **requests** from extension pages (`fromExtensionPage`); content scripts may only
   open the `drift-media` port, and only for a tab with a running session.
 - Manual mirroring test: `artifacts/clips/test.html` served on `127.0.0.1` (the unpacked id from `extension/dist`

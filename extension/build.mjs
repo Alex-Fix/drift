@@ -8,6 +8,7 @@ const options = {
   entryPoints: {
     background: "src/background/index.ts",
     popup: "src/popup/popup.ts",
+    offscreen: "src/offscreen/offscreen.ts",
   },
   outdir: "dist",
   bundle: true,
@@ -19,7 +20,7 @@ const options = {
 
 await rm("dist", { recursive: true, force: true });
 await mkdir("dist", { recursive: true });
-for (const file of ["manifest.json", "popup/popup.html", "popup/popup.css"]) {
+for (const file of ["manifest.json", "popup/popup.html", "popup/popup.css", "offscreen/offscreen.html"]) {
   await cp(`src/${file}`, `dist/${file.split("/").at(-1)}`);
 }
 

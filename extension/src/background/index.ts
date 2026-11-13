@@ -2,10 +2,14 @@ import {
   MEDIA_PORT,
   type CaptureCommand,
   type MirrorInfo,
+  type OffscreenCommand,
+  type OffscreenStarted,
+  type PlacementMessage,
   type PopupCall,
   type PrepareResult,
   type StatsMessage,
 } from "../messages";
+import type { Placement } from "../capture/crop";
 import type { HostEvent } from "../protocol";
 import { MirrorSessions } from "./mirror";
 import { HOST_NAME, NativeClient } from "./native";
@@ -15,7 +19,11 @@ const MIRROR_START_TIMEOUT_MS = 45_000;
 const sessions = new MirrorSessions();
 const infos = new Map<number, MirrorInfo>(); // per tab; kept after a stop so the popup can say why
 const frames = new Map<number, number>(); // tab → frame running the capture
-const mediaPorts = new Map<number, chrome.runtime.Port>();
+const mediaPorts = new Map<number, chrome.runtime.Port>(); // tab → its content script's media port
+const OFFSCREEN_URL = "offscreen.html";
+let offscreenTab: number | undefined; // the tab the offscreen document is capturing (one fallback at a time)
+let offscreenPort: chrome.runtime.Port | undefined;
+const AUDIO = { format: "pcm_s16", rate: 44100, channels: 2 } as const;
 
 const client = new NativeClient(() => chrome.runtime.connectNative(HOST_NAME), onHostEvent);
 
@@ -64,9 +72,13 @@ async function answer(call: PopupCall): Promise<object> {
   }
 }
 
-/** Media from the content script mirroring in a tab: forwarded only if it's for that tab's session. */
+/**
+ * Media ports. From a content script: media for its own tab's session (page path) or placement updates (fallback).
+ * From the offscreen document: media for the tab it captures. Anything else is dropped.
+ */
 chrome.runtime.onConnect.addListener((port) => {
-  const tabId = port.sender?.tab?.id;
+  const fromOffscreen = port.sender?.url === chrome.runtime.getURL(OFFSCREEN_URL);
+  const tabId = fromOffscreen ? offscreenTab : port.sender?.tab?.id;
   if (port.name !== MEDIA_PORT || port.sender?.id !== chrome.runtime.id || tabId === undefined) {
     port.disconnect();
     return;
@@ -75,18 +87,28 @@ chrome.runtime.onConnect.addListener((port) => {
     port.disconnect();
     return;
   }
-  mediaPorts.set(tabId, port);
+  if (fromOffscreen) offscreenPort = port;
+  else mediaPorts.set(tabId, port);
   port.onMessage.addListener((raw: unknown) => {
     if (isStats(raw)) {
       const info = infos.get(tabId);
       if (info) info.stats = raw.stats;
       return;
     }
+    if (!fromOffscreen && isPlacement(raw)) {
+      if (offscreenTab === tabId)
+        void toOffscreen({ target: "offscreen", action: "placement", placement: raw.placement });
+      return;
+    }
     const notification = sessions.accept(tabId, raw);
     if (notification !== undefined) client.notify(notification);
   });
   port.onDisconnect.addListener(() => {
-    if (mediaPorts.get(tabId) === port) mediaPorts.delete(tabId);
+    if (fromOffscreen) {
+      if (offscreenPort === port) offscreenPort = undefined;
+    } else if (mediaPorts.get(tabId) === port) {
+      mediaPorts.delete(tabId);
+    }
     void stopMirror(tabId, "capture_ended");
   });
 });
@@ -95,23 +117,78 @@ async function startMirror(tabId: number, frameId: number, index: number, device
   if (sessions.session(tabId) !== undefined) await stopMirror(tabId, "replaced");
   await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["capture.js"] });
   const prepared = await toFrame<PrepareResult>(tabId, frameId, { kind: "drift-capture", action: "prepare", index });
-  if (!prepared.ok) throw new Error(prepared.error);
+  if (!prepared.ok) {
+    if (prepared.error === "capture_failed") return startTabCapture(tabId, frameId, device, prepared.placement);
+    throw new Error(prepared.error);
+  }
+  const session = await mirrorStart(device, prepared.audio);
+  sessions.bind(tabId, session);
+  frames.set(tabId, frameId);
+  const { codec, width, height, fps } = prepared;
+  const info: MirrorInfo = { session, device, mode: "page", codec, width, height, fps };
+  infos.set(tabId, info);
+  await toFrame(tabId, frameId, { kind: "drift-capture", action: "start", session });
+  return info;
+}
+
+/** Fallback (implementation step 8): capture the whole tab in the offscreen document, cropped to the video. */
+async function startTabCapture(
+  tabId: number,
+  frameId: number,
+  device: string,
+  placement: Placement | null,
+): Promise<MirrorInfo> {
+  if (offscreenTab !== undefined) await stopMirror(offscreenTab, "replaced");
+  const session = await mirrorStart(device, true); // tab capture always has a sound track
+  sessions.bind(tabId, session);
+  frames.set(tabId, frameId);
+  offscreenTab = tabId;
+  try {
+    // After mirror_start, which may retry for a while: stream ids are short-lived.
+    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    await ensureOffscreen();
+    const started = await toOffscreen<OffscreenStarted>({
+      target: "offscreen",
+      action: "start",
+      streamId,
+      session,
+      placement,
+    });
+    if (!started.ok) throw new Error(started.error);
+    const { codec, width, height, fps } = started;
+    const info: MirrorInfo = { session, device, mode: "tab", codec, width, height, fps };
+    infos.set(tabId, info);
+    await toFrame(tabId, frameId, { kind: "drift-capture", action: "track" });
+    return info;
+  } catch (e) {
+    await stopMirror(tabId, "capture_failed");
+    throw e;
+  }
+}
+
+async function mirrorStart(device: string, audio: boolean): Promise<string> {
   const response = await client.request(
-    {
-      type: "mirror_start",
-      device,
-      ...(prepared.audio ? { audio: { format: "pcm_s16", rate: 44100, channels: 2 } as const } : {}),
-    },
+    { type: "mirror_start", device, ...(audio ? { audio: AUDIO } : {}) },
     MIRROR_START_TIMEOUT_MS,
   );
   if (response.type === "error") throw new Error(response.code);
   if (response.type !== "mirror_started") throw new Error("unexpected answer from drift-host");
-  sessions.bind(tabId, response.session);
-  frames.set(tabId, frameId);
-  const info: MirrorInfo = { session: response.session, device, ...prepared };
-  infos.set(tabId, info);
-  await toFrame(tabId, frameId, { kind: "drift-capture", action: "start", session: response.session });
-  return info;
+  return response.session;
+}
+
+async function ensureOffscreen(): Promise<void> {
+  const url = chrome.runtime.getURL(OFFSCREEN_URL);
+  const existing = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"], documentUrls: [url] });
+  if (existing.length > 0) return;
+  await chrome.offscreen.createDocument({
+    url: OFFSCREEN_URL,
+    reasons: ["USER_MEDIA"],
+    justification: "Mirror a video whose page doesn't allow capturing it directly, by capturing the tab.",
+  });
+}
+
+function toOffscreen<T = unknown>(command: OffscreenCommand): Promise<T> {
+  return chrome.runtime.sendMessage<OffscreenCommand, T>(command);
 }
 
 async function stopMirror(tabId: number, why: string): Promise<void> {
@@ -121,6 +198,12 @@ async function stopMirror(tabId: number, why: string): Promise<void> {
   if (info) info.stopped = why;
   mediaPorts.get(tabId)?.postMessage({ kind: "stop" });
   mediaPorts.delete(tabId);
+  if (offscreenTab === tabId) {
+    offscreenTab = undefined;
+    offscreenPort = undefined;
+    await toOffscreen({ target: "offscreen", action: "stop" }).catch(() => undefined);
+    await chrome.offscreen.closeDocument().catch(() => undefined); // releases the tab: it's audible again
+  }
   const frameId = frames.get(tabId);
   frames.delete(tabId);
   if (frameId !== undefined) {
@@ -135,6 +218,10 @@ function toFrame<T>(tabId: number, frameId: number, command: CaptureCommand): Pr
 
 function isStats(raw: unknown): raw is StatsMessage {
   return typeof raw === "object" && raw !== null && (raw as { kind?: unknown }).kind === "stats";
+}
+
+function isPlacement(raw: unknown): raw is PlacementMessage {
+  return typeof raw === "object" && raw !== null && (raw as { kind?: unknown }).kind === "placement";
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
