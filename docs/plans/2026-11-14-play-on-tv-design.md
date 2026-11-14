@@ -150,8 +150,14 @@ Still open:
 
 ## Implementation steps
 
-1. Spike follow-up (live): decode `playbackInfo`, try pause, seek and stop, and record the results here.
-2. Host: `playback.py` + `Control` command support + fake-TV tests.
+1. ~~Spike follow-up (live): decode `playbackInfo`, try pause, seek and stop, and record the results here.~~ Done
+   2026-11-14 (Open questions, Design).
+2. ~~Host: `playback.py` + `Control` command support + fake-TV tests.~~ Done 2026-11-14. `playback.py`:
+   `PlaybackSession` (start, load, pause/resume, seek, info, stop), with answers matched by `messageID`, state from
+   `playbackState`/`itemPlayedToEnd`, `taken` once the TV names the item, and `ended` when the TV closes the event
+   channel. `Control` gains `command()` and event callbacks; `pyatv_control.decode_event` decodes event messages, plain
+   or wrapped in `params.data`, up to 256 KiB. The fake TV answers requests on its event channel. Not run on the TV
+   yet (the user asked to hold live tests).
 3. Protocol: the `stream_*` messages, the old ones removed, fixtures, `docs/protocol.md`.
 4. Host: one session manager for both modes, status polling, `failed` detection.
 5. Extension: background mode choice, stream orchestration, fallback, Bring back.

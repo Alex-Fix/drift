@@ -45,8 +45,19 @@ class Control(Protocol):
 
     async def request(self, method: str, uri: str | None = None, body: dict[str, object] | None = None) -> Reply: ...
 
-    async def open_events(self, port: int) -> None:
-        """Connect the encrypted event channel and answer the receiver's events (its keep-alive)."""
+    async def open_events(
+        self,
+        port: int,
+        on_message: Callable[[dict[str, object]], None] | None = None,
+        on_close: Callable[[], None] | None = None,
+    ) -> None:
+        """Connect the encrypted event channel and answer the receiver's events (its keep-alive). Decoded messages go to
+        `on_message`; `on_close` runs when the channel closes, whichever side closed it."""
+        ...
+
+    async def command(self, payload: dict[str, object], *, session_id: str, stream_id: int) -> int:
+        """POST /command (HTTP/1.1) on a playback stream: `payload` goes as a binary plist in `params.data`. Returns
+        the HTTP status; answers to requests arrive on the event channel."""
         ...
 
     def stream_key(self, stream_connection_id: int) -> bytes:
