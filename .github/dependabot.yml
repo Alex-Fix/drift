@@ -1,0 +1,25 @@
+# Weekly, grouped dependency updates as pull requests. Each PR is reviewed and tested locally (scripts/test.sh,
+# scripts/lint.sh) before merging. The cooldown waits a few days after a release before proposing it, so a malicious
+# version that gets yanked quickly never reaches us.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7 }
+    groups:
+      actions: { patterns: ["*"] }
+
+  - package-ecosystem: npm
+    directory: /extension
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7 }
+    groups:
+      npm-minor-patch: { update-types: [minor, patch] }
+
+  - package-ecosystem: uv
+    directory: /host
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7 }
+    groups:
+      uv-minor-patch: { update-types: [minor, patch] }
