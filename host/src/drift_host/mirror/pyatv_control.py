@@ -4,6 +4,8 @@ Uses pyatv internals (pyatv has no mirroring API), so pyatv is pinned to a minor
 tests/test_pyatv_compat.py imports everything used here.
 """
 
+from __future__ import annotations  # TYPE_CHECKING-only names in annotations (Python < 3.14)
+
 import contextlib
 import logging
 from typing import TYPE_CHECKING, Self

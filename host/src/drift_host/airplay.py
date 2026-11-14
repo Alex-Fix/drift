@@ -1,5 +1,7 @@
 """AirPlay receivers. The only module that imports pyatv; the rest of the host sees the Receivers protocol."""
 
+from __future__ import annotations  # TYPE_CHECKING-only names in annotations (Python < 3.14)
+
 import asyncio
 import math
 import sys
