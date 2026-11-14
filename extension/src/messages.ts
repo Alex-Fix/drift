@@ -1,15 +1,35 @@
 // Messages inside the extension (popup ⇄ background ⇄ content script). The host protocol is in protocol.ts.
 import type { Placement } from "./capture/crop";
-import type { Request, VideoCodec } from "./protocol";
+import type { MediaType, Request, StreamAction, StreamState, VideoCodec } from "./protocol";
 
-/** Popup → background. */
+/** Popup → background. `send` streams or mirrors the video, whichever works (`background/cast.ts`). */
 export type PopupCall =
   | { kind: "host"; request: Request }
-  | { kind: "mirror"; tabId: number; frameId: number; index: number; device: string }
-  | { kind: "mirror_stop"; tabId: number }
-  | { kind: "mirror_info"; tabId: number };
+  | { kind: "send"; tabId: number; frameId: number; index: number; device: string }
+  | { kind: "stop"; tabId: number }
+  | { kind: "stream_control"; tabId: number; action: StreamAction; position?: number }
+  | { kind: "bring_back"; tabId: number }
+  | { kind: "info"; tabId: number };
+
+/** What's on the receiver from a tab: the answer to `info`. */
+export type CastInfo = MirrorInfo | StreamInfo;
+
+export interface StreamInfo {
+  kind: "stream";
+  session: string;
+  device: string;
+  mediaType: MediaType;
+  state: StreamState;
+  position?: number; // seconds, as the receiver last reported
+  duration?: number; // absent for live streams
+  buffered?: number; // seconds loaded ahead
+  fallingBack?: boolean; // the receiver couldn't play it: switching to mirroring
+  stopped?: string; // why, once the session ended
+}
 
 export interface MirrorInfo {
+  kind: "mirror";
+  fellBack?: boolean; // streaming wasn't possible, so this mirrors instead
   session: string;
   device: string;
   mode: "page" | "tab"; // captureStream() in the page, or the tab-capture fallback

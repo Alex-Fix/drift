@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { MirrorInfo } from "../src/messages";
-import { blocked, explain, mirrorSummary, pickReceiver, receiverLabel } from "../src/popup/model";
+import type { MirrorInfo, StreamInfo } from "../src/messages";
+import {
+  blocked,
+  cantSend,
+  castSummary,
+  clock,
+  explain,
+  mirrorSummary,
+  pickReceiver,
+  receiverLabel,
+  sendHint,
+} from "../src/popup/model";
 import type { DeviceInfo } from "../src/protocol";
 
 const tv: DeviceInfo = { id: "TV", name: "Living Room", model: "UCU7000", mirror: true, paired: true };
@@ -44,6 +54,7 @@ describe("explain", () => {
 
 describe("mirrorSummary", () => {
   const info: MirrorInfo = {
+    kind: "mirror",
     session: "s",
     device: "TV",
     mode: "page",
@@ -86,6 +97,7 @@ describe("mirrorSummary", () => {
 describe("mirrorSummary in tab-capture mode", () => {
   it("says it's capturing the tab", () => {
     const info: MirrorInfo = {
+      kind: "mirror",
       session: "s",
       device: "TV",
       mode: "tab",
@@ -101,6 +113,7 @@ describe("mirrorSummary in tab-capture mode", () => {
 describe("mirrorSummary after a step-down", () => {
   it("shows the current quality and that it was lowered", () => {
     const info: MirrorInfo = {
+      kind: "mirror",
       session: "s",
       device: "TV",
       mode: "page",
@@ -122,5 +135,81 @@ describe("mirrorSummary after a step-down", () => {
     expect(mirrorSummary(info, "TV").detail).toBe(
       "H.264 1920×1080 @ 60 fps · with sound · quality lowered 1× to keep up · page cost 0.4 ms/frame (max 6)",
     );
+  });
+});
+
+describe("sending", () => {
+  const hls = { url: "https://cdn.example/a.m3u8", mime: undefined, drm: false };
+  const blob = { url: undefined, mime: undefined, drm: false };
+
+  it("lets a receiver that can't mirror still take a stream", () => {
+    expect(cantSend(mac, hls)).toBe("unpaired"); // streamable, but not paired yet
+    expect(cantSend({ ...mac, paired: true }, hls)).toBeUndefined();
+    expect(cantSend({ ...mac, paired: true }, blob)).toBe("unsupported");
+  });
+
+  it("never sends DRM video and needs pairing and a receiver", () => {
+    expect(cantSend(tv, { ...hls, drm: true })).toBe("drm");
+    expect(cantSend(newTv, hls)).toBe("unpaired");
+    expect(cantSend(undefined, hls)).toBe("none");
+    expect(cantSend(tv, blob)).toBeUndefined();
+  });
+
+  it("says how the video will be sent", () => {
+    expect(sendHint(hls)).toMatch(/plays this video itself/);
+    expect(sendHint(blob)).toMatch(/Mirrored/);
+  });
+});
+
+describe("stream summaries", () => {
+  const info: StreamInfo = { kind: "stream", session: "s", device: "TV", mediaType: "file", state: "playing" };
+
+  it("shows where it is on the TV", () => {
+    const summary = castSummary({ ...info, position: 75.4, duration: 3723, buffered: 24.6 }, "Living Room");
+    expect(summary).toEqual({
+      title: "Playing on Living Room",
+      detail: "1:15 / 1:02:03 · 25 s buffered · played by the TV itself",
+    });
+  });
+
+  it("names each state and marks live streams", () => {
+    expect(castSummary({ ...info, state: "loading" }, "TV").title).toBe("Loading on TV…");
+    expect(castSummary({ ...info, state: "paused" }, "TV").title).toBe("Paused on TV");
+    expect(castSummary({ ...info, state: "ended" }, "TV").title).toBe("Finished on TV");
+    expect(castSummary({ ...info, position: 5 }, "TV").detail).toBe("0:05 · live · played by the TV itself");
+  });
+
+  it("says when it switches to mirroring, and why a stream stopped", () => {
+    expect(castSummary({ ...info, fallingBack: true }, "TV")).toEqual({
+      title: "TV couldn't play it directly",
+      detail: "Switching to mirroring…",
+    });
+    expect(castSummary({ ...info, stopped: "brought_back" }, "TV").title).toBe("Back on the page");
+    expect(castSummary({ ...info, stopped: "stopped" }, "TV").title).toBe("Stopped playing on TV");
+    expect(castSummary({ ...info, stopped: "stream_failed" }, "TV").title).toMatch(/couldn't play this video/);
+  });
+
+  it("says a mirror is a fallback from streaming", () => {
+    const mirror: MirrorInfo = {
+      kind: "mirror",
+      fellBack: true,
+      session: "s",
+      device: "TV",
+      mode: "page",
+      codec: "h264",
+      width: 1280,
+      height: 720,
+      fps: 30,
+    };
+    expect(castSummary(mirror, "TV").detail).toBe(
+      "streaming wasn't possible, mirroring instead · H.264 1280×720 @ 30 fps",
+    );
+  });
+
+  it("formats clock times", () => {
+    expect(clock(0)).toBe("0:00");
+    expect(clock(59.9)).toBe("0:59");
+    expect(clock(3600)).toBe("1:00:00");
+    expect(clock(-3)).toBe("0:00");
   });
 });

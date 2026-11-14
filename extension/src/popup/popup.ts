@@ -1,14 +1,14 @@
-// The toolbar popup: pick a receiver (pairing it if needed), mirror a video from this tab, watch and stop it.
+// The toolbar popup: pick a receiver (pairing it if needed), send a video from this tab to it, watch and stop it.
 // Decisions live in model.ts; this file only wires the DOM and Chrome. Page-derived text is set with textContent.
 import { findCandidates, type Candidate } from "../content/candidates";
-import type { MirrorInfo, PopupCall } from "../messages";
+import type { CastInfo, PopupCall } from "../messages";
 import type { DeviceInfo, HostEvent, Request, Response } from "../protocol";
-import { blocked, explain, mirrorSummary, pickReceiver, receiverLabel } from "./model";
+import { blocked, cantSend, castSummary, explain, pickReceiver, receiverLabel, sendHint } from "./model";
 
 const RECEIVER_KEY = "receiver";
 const SLOW_START_MS = 3000;
 
-/** A video in a frame of the active tab: where capture.js must be injected to mirror it. */
+/** A video in a frame of the active tab: where it is, to send it. */
 interface Located {
   tabId: number;
   frameId: number;
@@ -34,13 +34,14 @@ const ui = {
   mirrorTitle: $("mirror-title", HTMLParagraphElement),
   mirrorDetail: $("mirror-detail", HTMLParagraphElement),
   stop: $("stop", HTMLButtonElement),
+  bringBack: $("bring-back", HTMLButtonElement),
   videos: $("videos", HTMLUListElement),
   status: $("status", HTMLElement),
 };
 
 let devices: DeviceInfo[] = [];
 let videos: Located[] = [];
-let mirroringHere = false;
+let sendingHere = false;
 let busy = false;
 
 // ---- background --------------------------------------------------------------------------------------------------
@@ -89,7 +90,6 @@ async function scan(): Promise<void> {
       ui.devices.replaceChildren(
         ...devices.map((d) => {
           const option = new Option(receiverLabel(d), d.id);
-          option.disabled = d.mirror === false;
           return option;
         }),
       );
@@ -196,7 +196,6 @@ function renderVideos(): void {
     ui.videos.replaceChildren(Object.assign(document.createElement("li"), { textContent: "No video on this page." }));
     return;
   }
-  const reason = blocked(selected());
   ui.videos.replaceChildren(
     ...videos.map((located) => {
       const { candidate } = located;
@@ -205,17 +204,18 @@ function renderVideos(): void {
       label.title = candidate.title;
       const button = Object.assign(document.createElement("button"), {
         type: "button",
-        textContent: mirroringHere ? "Mirror this instead" : "Mirror",
+        textContent: sendingHere ? "Send this instead" : "Send to TV",
+        title: sendHint(candidate),
       });
-      if (candidate.drm) {
+      const reason = cantSend(selected(), candidate);
+      if (reason !== undefined || busy) {
         button.disabled = true;
-        button.title = explain("drm");
-      } else if (reason !== undefined || busy) {
-        button.disabled = true;
-        button.title = reason === "unpaired" ? explain("pairing_required") : "Pick a receiver that can mirror";
+        if (reason === "drm") button.title = explain("drm");
+        else if (reason === "unpaired") button.title = explain("pairing_required");
+        else if (reason !== undefined) button.title = "Pick a receiver that can play it";
       }
       button.addEventListener("click", () => {
-        void mirror(located);
+        void send(located);
       });
       item.append(label, button);
       return item;
@@ -223,7 +223,7 @@ function renderVideos(): void {
   );
 }
 
-async function mirror(located: Located): Promise<void> {
+async function send(located: Located): Promise<void> {
   const device = selected();
   if (device === undefined) return;
   busy = true;
@@ -234,7 +234,7 @@ async function mirror(located: Located): Promise<void> {
   }, SLOW_START_MS);
   try {
     const { tabId, frameId, index } = located;
-    await background({ kind: "mirror", tabId, frameId, index, device: device.id });
+    await background({ kind: "send", tabId, frameId, index, device: device.id });
     say("");
   } catch (e) {
     sayError(e);
@@ -245,32 +245,44 @@ async function mirror(located: Located): Promise<void> {
   }
 }
 
-ui.stop.addEventListener("click", () => {
-  void activeTab().then(async (tabId) => {
-    if (tabId === undefined) return;
-    try {
-      await background({ kind: "mirror_stop", tabId });
-    } catch (e) {
-      sayError(e);
-    }
-    await refresh();
-  });
-});
+function onTab(call: (tabId: number) => PopupCall): () => void {
+  return () => {
+    void activeTab().then(async (tabId) => {
+      if (tabId === undefined) return;
+      try {
+        await background(call(tabId));
+      } catch (e) {
+        sayError(e);
+      }
+      await refresh();
+    });
+  };
+}
+
+ui.stop.addEventListener(
+  "click",
+  onTab((tabId) => ({ kind: "stop", tabId })),
+);
+ui.bringBack.addEventListener(
+  "click",
+  onTab((tabId) => ({ kind: "bring_back", tabId })),
+);
 
 async function refresh(): Promise<void> {
   const tabId = await activeTab();
   if (tabId === undefined) return;
-  const { info } = await background<{ info?: MirrorInfo }>({ kind: "mirror_info", tabId });
+  const { info } = await background<{ info?: CastInfo }>({ kind: "info", tabId });
   const running = info !== undefined && info.stopped === undefined;
-  if (running !== mirroringHere) {
-    mirroringHere = running;
+  if (running !== sendingHere) {
+    sendingHere = running;
     renderVideos();
   }
   ui.mirroring.hidden = info === undefined;
   ui.stop.hidden = !running;
+  ui.bringBack.hidden = !(running && info.kind === "stream" && info.fallingBack !== true);
   if (info === undefined) return;
   const receiver = devices.find((d) => d.id === info.device)?.name ?? "the receiver";
-  const { title, detail } = mirrorSummary(info, receiver);
+  const { title, detail } = castSummary(info, receiver);
   ui.mirrorTitle.textContent = title;
   ui.mirrorDetail.textContent = detail;
 }
@@ -278,7 +290,7 @@ async function refresh(): Promise<void> {
 // ---- start -------------------------------------------------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((message: { kind?: string; event?: HostEvent }) => {
-  if (message.kind === "event" && message.event?.type === "mirror_status") void refresh();
+  if (message.kind === "event" && message.event !== undefined) void refresh();
 });
 ui.rescan.addEventListener("click", () => {
   void scan();

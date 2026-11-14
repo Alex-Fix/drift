@@ -170,7 +170,15 @@ Still open:
    the load, `stopped` with `stream_failed` when the receiver leaves; `ended` from `itemPlayedToEnd`, or when polled
    within 1 s of the end while not playing. `Receivers.open_playback` connects without the mirroring feature check.
    Not run on the TV yet (live tests on hold).
-5. Extension: background mode choice, stream orchestration, fallback, Bring back.
+5. ~~Extension: background mode choice, stream orchestration, fallback, Bring back.~~ Done 2026-11-14.
+   `background/cast.ts` (unit-tested) chooses the mode, by path (`.m3u8`, `.mp4`/`.m4v`/`.mov`) or by the
+   `<source type>` the page gives (`candidates.ts` now reports it), and decides fallbacks: `stream_start` answered
+   `stream_failed`, or a stream that is `failed`/dropped before it ever played, mirrors the same video instead; once
+   it has played, a failure just ends it. The popup's single call is `send`, and the background pauses the page video
+   once the stream starts (`content/page.ts`, injected functions). `bring_back` stops the stream and resumes the page
+   at the receiver's last position. Interim popup: a "Send to TV" button with a hint saying how it will be sent, a
+   stream summary (state, time, buffer), and Bring back/Stop; receivers that can't mirror are selectable, since they
+   may still stream. The full popup comes in step 6. Not run in the browser or on the TV yet.
 6. Popup rebuild: themes, cards, now-playing, Stats for nerds.
 7. Page overlay (remote) for streaming and both mirroring modes.
 8. Live checks, README, architecture, security skill.
