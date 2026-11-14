@@ -163,7 +163,13 @@ Still open:
 3. ~~Protocol: the `stream_*` messages, the old ones removed, fixtures, `docs/protocol.md`.~~ Done 2026-11-14. Also
    removed pyatv's `/play` path (`Receivers.play/control/stop`); the host refuses a request it has no handler for
    with `unknown_type` until step 4 handles `stream_*`.
-4. Host: one session manager for both modes, status polling, `failed` detection.
+4. ~~Host: one session manager for both modes, status polling, `failed` detection.~~ Done 2026-11-14, as two managers
+   rather than one: `streaming.py` (`Streaming`) next to `mirroring.py`, with `Host` keeping one session across both
+   (starting either kind closes the other) and the retry loop shared in `retry.py`. `stream_status` goes out on every
+   state change and once a second with position/duration/buffer; `failed` (`stream_failed`) when not playing 8 s after
+   the load, `stopped` with `stream_failed` when the receiver leaves; `ended` from `itemPlayedToEnd`, or when polled
+   within 1 s of the end while not playing. `Receivers.open_playback` connects without the mirroring feature check.
+   Not run on the TV yet (live tests on hold).
 5. Extension: background mode choice, stream orchestration, fallback, Bring back.
 6. Popup rebuild: themes, cards, now-playing, Stats for nerds.
 7. Page overlay (remote) for streaming and both mirroring modes.

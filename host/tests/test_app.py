@@ -28,6 +28,9 @@ class FakeReceivers:
         assert self.tv is not None
         return self.tv
 
+    async def open_playback(self, device: str) -> Control:
+        return await self.open_mirror(device)
+
     async def pair(self, device: str, read_pin: Callable[[], Awaitable[str]]) -> None:
         if device != "AA:BB":
             raise ProtocolError("unknown_device")

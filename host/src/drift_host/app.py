@@ -8,7 +8,9 @@ from typing import BinaryIO, cast
 from drift_host import __version__, messaging
 from drift_host.airplay import Receivers
 from drift_host.mirroring import Mirroring
+from drift_host.playback import MediaType
 from drift_host.protocol import MESSAGES, VERSION, ErrorCode, ProtocolError, error, parse
+from drift_host.streaming import Action, Streaming
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +35,9 @@ class Host:
     def __init__(self, receivers: Receivers, writer: messaging.Writer) -> None:
         self._receivers = receivers
         self._writer = writer
+        # One session at a time, either kind: starting one ends the other.
         self._mirroring = Mirroring(receivers, self._event)
+        self._streaming = Streaming(receivers, self._event)
         self._pairings: dict[str, _Pairing] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self._untagged_errors: dict[str, float] = {}
@@ -76,6 +80,7 @@ class Host:
             if pairing.task is not None:
                 pairing.task.cancel()
         await self._mirroring.close()
+        await self._streaming.close()
 
     async def _answer(self, request: dict[str, object]) -> None:
         try:
@@ -100,10 +105,28 @@ class Host:
             case "pair_pin":
                 await self._pair_pin(cast(str, request["device"]), cast(str, request["pin"]))
             case "mirror_start":
+                await self._streaming.close()
                 session = await self._mirroring.start(cast(str, request["device"]), audio="audio" in request)
                 return {"type": "mirror_started", "session": session}
             case "mirror_stop":
                 await self._mirroring.stop(cast(str, request["session"]))
+            case "stream_start":
+                await self._mirroring.close()
+                session = await self._streaming.start(
+                    cast(str, request["device"]),
+                    cast(str, request["url"]),
+                    cast(MediaType, request["media_type"]),
+                    cast(float | None, request.get("position")),
+                )
+                return {"type": "stream_started", "session": session}
+            case "stream_control":
+                await self._streaming.control(
+                    cast(str, request["session"]),
+                    cast(Action, request["action"]),
+                    cast(float | None, request.get("position")),
+                )
+            case "stream_stop":
+                await self._streaming.stop(cast(str, request["session"]))
             case _:
                 raise ProtocolError("unknown_type")  # in the protocol, not handled by this host
         return {"type": "ok"}

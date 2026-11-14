@@ -42,6 +42,8 @@ class Receivers(Protocol):
 
     async def open_mirror(self, device: str) -> Control: ...
 
+    async def open_playback(self, device: str) -> Control: ...
+
     async def close(self) -> None: ...
 
 
@@ -96,6 +98,17 @@ class PyatvReceivers:
         service = config.get_service(AtvProtocol.AirPlay)
         if service is None or not supports_mirroring(service.properties.get("features")):
             raise ProtocolError("mirror_unsupported")
+
+        with _receiver_errors():
+            return await PyatvControl.connect(config)
+
+    async def open_playback(self, device: str) -> PyatvControl:
+        """A pair-verified control channel for URL playback with a receiver found by the last scan. No feature check:
+        receivers that can't play URLs this way refuse the session, and the extension falls back to mirroring."""
+        config = self._configs.get(device)
+        if config is None:
+            raise ProtocolError("unknown_device")
+        from drift_host.mirror.pyatv_control import PyatvControl
 
         with _receiver_errors():
             return await PyatvControl.connect(config)
