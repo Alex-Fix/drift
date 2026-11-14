@@ -16,7 +16,8 @@ export type ErrorCode =
   | "mirror_unsupported"
   | "mirror_failed"
   | "session_unknown"
-  | "pairing_failed";
+  | "pairing_failed"
+  | "stream_failed";
 
 export interface DeviceInfo {
   id: string;
@@ -26,7 +27,10 @@ export interface DeviceInfo {
   paired?: boolean; // drift has pairing credentials for it
 }
 
-export type PlaybackState = "idle" | "loading" | "playing" | "paused";
+/** `file`: MP4/MOV; `streaming`: HLS. */
+export type MediaType = "file" | "streaming";
+export type StreamState = "loading" | "playing" | "paused" | "ended" | "stopped" | "failed";
+export type StreamAction = "pause" | "resume" | "seek";
 export type VideoCodec = "h264" | "hevc";
 
 /** Interleaved s16le stereo at 44.1 kHz: the only audio the host takes (it wraps it as uncompressed ALAC). */
@@ -48,13 +52,13 @@ export interface VideoConfigMessage {
 export type Request =
   | { type: "hello" }
   | { type: "scan"; timeout_ms?: number }
-  | { type: "play"; device: string; url: string; title?: string; position?: number }
-  | { type: "control"; device: string; action: "pause" | "resume" | "seek"; position?: number }
-  | { type: "stop"; device: string }
   | { type: "pair_begin"; device: string }
   | { type: "pair_pin"; device: string; pin: string }
   | { type: "mirror_start"; device: string; audio?: AudioFormat }
-  | { type: "mirror_stop"; session: string };
+  | { type: "mirror_stop"; session: string }
+  | { type: "stream_start"; device: string; url: string; media_type: MediaType; position?: number }
+  | { type: "stream_control"; session: string; action: StreamAction; position?: number }
+  | { type: "stream_stop"; session: string };
 
 /** Extension → host, no id, no response (media at frame rate). `ts`: microseconds on the capture clock. */
 export type Notification =
@@ -66,15 +70,18 @@ export type Response =
   | { v: 1; id: string; type: "devices"; devices: DeviceInfo[] }
   | { v: 1; id: string; type: "ok" }
   | { v: 1; id?: string; type: "error"; code: ErrorCode }
-  | { v: 1; id: string; type: "mirror_started"; session: string };
+  | { v: 1; id: string; type: "mirror_started"; session: string }
+  | { v: 1; id: string; type: "stream_started"; session: string };
 
-export interface StatusEvent {
+export interface StreamStatusEvent {
   v: 1;
-  type: "status";
-  device: string;
-  state: PlaybackState;
+  type: "stream_status";
+  session: string;
+  state: StreamState;
+  reason?: ErrorCode; // with stopped / failed
   position?: number;
-  duration?: number;
+  duration?: number; // absent for live streams
+  buffered?: number; // seconds loaded ahead of the position
 }
 
 export interface MirrorStatusEvent {
@@ -89,7 +96,7 @@ export interface MirrorStatusEvent {
   dropped?: number;
 }
 
-export type HostEvent = StatusEvent | MirrorStatusEvent;
+export type HostEvent = MirrorStatusEvent | StreamStatusEvent;
 
 export type Message = (Request & { v: 1; id: string }) | Response | HostEvent | (Notification & { v: 1 });
 
@@ -133,6 +140,7 @@ const ERROR_CODES: readonly ErrorCode[] = [
   "mirror_failed",
   "session_unknown",
   "pairing_failed",
+  "stream_failed",
 ];
 const SESSION: Spec = { kind: "pattern", regex: /^[0-9a-f]{32}$/ };
 const MEDIA_TS: Spec = { kind: "num", min: 0, max: 2 ** 53, integer: true };
@@ -145,19 +153,6 @@ const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 const MESSAGES: Record<string, [Kind, Fields]> = {
   hello: ["request", {}],
   scan: ["request", { timeout_ms: [{ kind: "num", min: 500, max: 10_000, integer: true }, false] }],
-  play: [
-    "request",
-    { device: [DEVICE, true], url: [{ kind: "url" }, true], title: [NAME, false], position: [POSITION, false] },
-  ],
-  control: [
-    "request",
-    {
-      device: [DEVICE, true],
-      action: [{ kind: "oneOf", values: ["pause", "resume", "seek"] }, true],
-      position: [POSITION, false],
-    },
-  ],
-  stop: ["request", { device: [DEVICE, true] }],
   pair_begin: ["request", { device: [DEVICE, true] }],
   pair_pin: ["request", { device: [DEVICE, true], pin: [{ kind: "pattern", regex: /^[0-9]{4,8}$/ }, true] }],
   mirror_start: [
@@ -178,19 +173,29 @@ const MESSAGES: Record<string, [Kind, Fields]> = {
     },
   ],
   mirror_stop: ["request", { session: [SESSION, true] }],
+  stream_start: [
+    "request",
+    {
+      device: [DEVICE, true],
+      url: [{ kind: "url" }, true],
+      media_type: [{ kind: "oneOf", values: ["file", "streaming"] }, true],
+      position: [POSITION, false],
+    },
+  ],
+  stream_control: [
+    "request",
+    {
+      session: [SESSION, true],
+      action: [{ kind: "oneOf", values: ["pause", "resume", "seek"] }, true],
+      position: [POSITION, false], // required for seek
+    },
+  ],
+  stream_stop: ["request", { session: [SESSION, true] }],
   devices: ["response", { devices: [{ kind: "devices" }, true] }],
   ok: ["response", {}],
   error: ["response", { code: [{ kind: "oneOf", values: ERROR_CODES }, true] }],
   mirror_started: ["response", { session: [SESSION, true] }],
-  status: [
-    "event",
-    {
-      device: [DEVICE, true],
-      state: [{ kind: "oneOf", values: ["idle", "loading", "playing", "paused"] }, true],
-      position: [POSITION, false],
-      duration: [POSITION, false],
-    },
-  ],
+  stream_started: ["response", { session: [SESSION, true] }],
   mirror_status: [
     "event",
     {
@@ -201,6 +206,17 @@ const MESSAGES: Record<string, [Kind, Fields]> = {
       width: [DIMENSION, false],
       height: [DIMENSION, false],
       dropped: [{ kind: "num", min: 0, max: 2 ** 53, integer: true }, false],
+    },
+  ],
+  stream_status: [
+    "event",
+    {
+      session: [SESSION, true],
+      state: [{ kind: "oneOf", values: ["loading", "playing", "paused", "ended", "stopped", "failed"] }, true],
+      reason: [{ kind: "oneOf", values: ERROR_CODES }, false],
+      position: [POSITION, false],
+      duration: [POSITION, false],
+      buffered: [POSITION, false],
     },
   ],
   video: [
@@ -256,7 +272,7 @@ export function parse(raw: unknown): Message {
   }
 
   checkFields(raw, fields, ["v", "type", "id"]);
-  if (raw.type === "control" && raw.action === "seek" && !("position" in raw)) {
+  if (raw.type === "stream_control" && raw.action === "seek" && !("position" in raw)) {
     throw new ProtocolError("invalid_message");
   }
   return raw as unknown as Message;

@@ -9,12 +9,12 @@ from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from drift_host.protocol import ProtocolError
 
 if TYPE_CHECKING:
-    from pyatv.interface import AppleTV, BaseConfig, Storage
+    from pyatv.interface import BaseConfig, Storage
 
     from drift_host.mirror.pyatv_control import PyatvControl
     from drift_host.mirror.session import Control
@@ -35,17 +35,8 @@ class Device:
         return message
 
 
-type Action = Literal["pause", "resume", "seek"]
-
-
 class Receivers(Protocol):
     async def scan(self, listen: float) -> list[Device]: ...
-
-    async def play(self, device: str, url: str, position: float | None) -> None: ...
-
-    async def control(self, device: str, action: Action, position: float | None) -> None: ...
-
-    async def stop(self, device: str) -> None: ...
 
     async def pair(self, device: str, read_pin: Callable[[], Awaitable[str]]) -> None: ...
 
@@ -55,7 +46,7 @@ class Receivers(Protocol):
 
 
 class PyatvReceivers:
-    """Receivers over pyatv. Connections are kept per device for the life of the host process.
+    """Receivers over pyatv.
 
     Pairing credentials live in pyatv's file storage at `credentials` (the user data dir, owner-only); scan and
     connect load them, so a paired receiver needs nothing else. Without a path they're kept in memory only.
@@ -65,7 +56,6 @@ class PyatvReceivers:
         self._credentials = credentials
         self._storage: Storage | None = None
         self._configs: dict[str, BaseConfig] = {}
-        self._connections: dict[str, AppleTV] = {}
 
     async def scan(self, listen: float) -> list[Device]:
         import pyatv
@@ -91,49 +81,8 @@ class PyatvReceivers:
             )
         return devices
 
-    async def play(self, device: str, url: str, position: float | None) -> None:
-        atv = await self._connect(device)
-        with _receiver_errors():
-            await atv.stream.play_url(url, **({"position": int(position)} if position else {}))
-
-    async def control(self, device: str, action: Action, position: float | None) -> None:
-        atv = await self._connect(device)
-        with _receiver_errors():
-            match action:
-                case "pause":
-                    await atv.remote_control.pause()
-                case "resume":
-                    await atv.remote_control.play()
-                case "seek":
-                    await atv.remote_control.set_position(int(position or 0))
-
-    async def stop(self, device: str) -> None:
-        atv = self._connections.pop(device, None)
-        if atv is not None:
-            try:
-                with _receiver_errors():
-                    await atv.remote_control.stop()
-            finally:
-                await asyncio.gather(*atv.close())
-
     async def close(self) -> None:
-        connections = list(self._connections.values())
-        self._connections.clear()
-        for atv in connections:
-            await asyncio.gather(*atv.close())
-
-    async def _connect(self, device: str) -> AppleTV:
-        if device in self._connections:
-            return self._connections[device]
-        config = self._configs.get(device)
-        if config is None:
-            raise ProtocolError("unknown_device")
-        import pyatv
-
-        with _receiver_errors():
-            atv = await pyatv.connect(config, asyncio.get_running_loop(), storage=await self._load_storage())
-        self._connections[device] = atv
-        return atv
+        """Nothing to release: sessions own their connections."""
 
     async def open_mirror(self, device: str) -> PyatvControl:
         """A pair-verified control channel for a mirroring session with a receiver found by the last scan."""

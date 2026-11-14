@@ -25,6 +25,7 @@ type ErrorCode = Literal[
     "mirror_failed",
     "session_unknown",
     "pairing_failed",
+    "stream_failed",
 ]
 
 
@@ -92,7 +93,7 @@ DEVICE = Str(128)
 NAME = Str(256)
 URL_MAX = 8 * 1024
 POSITION = Num(0)
-STATES = OneOf(frozenset({"idle", "loading", "playing", "paused"}))
+STREAM_STATES = OneOf(frozenset({"loading", "playing", "paused", "ended", "stopped", "failed"}))
 ERROR_CODES = OneOf(frozenset(get_args(ErrorCode.__value__)))
 SESSION = Pattern(r"[0-9a-f]{32}")
 MEDIA_TS = Num(0, 2**53, integer=True)  # microseconds on the capture clock
@@ -106,19 +107,6 @@ MESSAGES: Final[dict[str, tuple[Kind, dict[str, tuple[Spec, bool]]]]] = {
     # requests
     "hello": ("request", {}),
     "scan": ("request", {"timeout_ms": (Num(500, 10_000, integer=True), False)}),
-    "play": (
-        "request",
-        {"device": (DEVICE, True), "url": (Url(), True), "title": (NAME, False), "position": (POSITION, False)},
-    ),
-    "control": (
-        "request",
-        {
-            "device": (DEVICE, True),
-            "action": (OneOf(frozenset({"pause", "resume", "seek"})), True),
-            "position": (POSITION, False),
-        },
-    ),
-    "stop": ("request", {"device": (DEVICE, True)}),
     "pair_begin": ("request", {"device": (DEVICE, True)}),
     "pair_pin": ("request", {"device": (DEVICE, True), "pin": (Pattern(r"[0-9]{4,8}"), True)}),
     "mirror_start": (
@@ -139,21 +127,32 @@ MESSAGES: Final[dict[str, tuple[Kind, dict[str, tuple[Spec, bool]]]]] = {
         },
     ),
     "mirror_stop": ("request", {"session": (SESSION, True)}),
+    # the receiver fetches and plays the URL itself (`file`: MP4/MOV, `streaming`: HLS)
+    "stream_start": (
+        "request",
+        {
+            "device": (DEVICE, True),
+            "url": (Url(), True),
+            "media_type": (OneOf(frozenset({"file", "streaming"})), True),
+            "position": (POSITION, False),
+        },
+    ),
+    "stream_control": (
+        "request",
+        {
+            "session": (SESSION, True),
+            "action": (OneOf(frozenset({"pause", "resume", "seek"})), True),
+            "position": (POSITION, False),  # required for seek
+        },
+    ),
+    "stream_stop": ("request", {"session": (SESSION, True)}),
     # responses
     "devices": ("response", {"devices": (Devices(), True)}),
     "ok": ("response", {}),
     "error": ("response", {"code": (ERROR_CODES, True)}),
     "mirror_started": ("response", {"session": (SESSION, True)}),
+    "stream_started": ("response", {"session": (SESSION, True)}),
     # events
-    "status": (
-        "event",
-        {
-            "device": (DEVICE, True),
-            "state": (STATES, True),
-            "position": (POSITION, False),
-            "duration": (POSITION, False),
-        },
-    ),
     "mirror_status": (
         "event",
         {
@@ -164,6 +163,17 @@ MESSAGES: Final[dict[str, tuple[Kind, dict[str, tuple[Spec, bool]]]]] = {
             "width": (DIMENSION, False),
             "height": (DIMENSION, False),
             "dropped": (Num(0, 2**53, integer=True), False),
+        },
+    ),
+    "stream_status": (
+        "event",
+        {
+            "session": (SESSION, True),
+            "state": (STREAM_STATES, True),
+            "reason": (ERROR_CODES, False),  # with stopped / failed
+            "position": (POSITION, False),
+            "duration": (POSITION, False),  # absent for live streams
+            "buffered": (POSITION, False),  # seconds loaded ahead of the position
         },
     ),
     # notifications
@@ -229,7 +239,7 @@ def parse(raw: object) -> dict[str, object]:
         raise ProtocolError("invalid_message")
 
     _check_fields(message, fields, extra={"v", "type", "id"})
-    if kind_type == "control" and message["action"] == "seek" and "position" not in message:
+    if kind_type == "stream_control" and message["action"] == "seek" and "position" not in message:
         raise ProtocolError("invalid_message")
     return message
 

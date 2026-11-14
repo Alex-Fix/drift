@@ -1,1 +1,1 @@
-{ "v": 1, "type": "control", "id": "4", "device": "AA:BB:CC:DD:EE:FF", "action": "seek" }
+{ "v": 1, "type": "stream_control", "id": "4", "session": "0123456789abcdef0123456789abcdef", "action": "seek" }

@@ -85,7 +85,7 @@ export class NativeClient {
       console.warn("drift: dropped an invalid message from drift-host:", e.code);
       return;
     }
-    if (message.type === "status" || message.type === "mirror_status") {
+    if (message.type === "stream_status" || message.type === "mirror_status") {
       this.onEvent(message);
     } else if (isResponse(message)) {
       this.resolve(message);
@@ -107,7 +107,7 @@ export class NativeClient {
   }
 }
 
-const RESPONSES: ReadonlySet<string> = new Set(["devices", "ok", "error", "mirror_started"]);
+const RESPONSES: ReadonlySet<string> = new Set(["devices", "ok", "error", "mirror_started", "stream_started"]);
 
 /** A response to one of our requests (`hello` only with the host's version; without it, it's a request). */
 function isResponse(message: Message): message is Response {

@@ -6,7 +6,7 @@ import time
 from typing import BinaryIO, cast
 
 from drift_host import __version__, messaging
-from drift_host.airplay import Action, Receivers
+from drift_host.airplay import Receivers
 from drift_host.mirroring import Mirroring
 from drift_host.protocol import MESSAGES, VERSION, ErrorCode, ProtocolError, error, parse
 
@@ -95,18 +95,6 @@ class Host:
                 timeout_ms = cast(int, request.get("timeout_ms", 3000))
                 devices = await self._receivers.scan(timeout_ms / 1000)
                 return {"type": "devices", "devices": [d.to_message() for d in devices]}
-            case "play":
-                await self._receivers.play(
-                    cast(str, request["device"]), cast(str, request["url"]), cast(float | None, request.get("position"))
-                )
-            case "control":
-                await self._receivers.control(
-                    cast(str, request["device"]),
-                    cast(Action, request["action"]),
-                    cast(float | None, request.get("position")),
-                )
-            case "stop":
-                await self._receivers.stop(cast(str, request["device"]))
             case "pair_begin":
                 await self._pair_begin(cast(str, request["device"]))
             case "pair_pin":
@@ -116,6 +104,8 @@ class Host:
                 return {"type": "mirror_started", "session": session}
             case "mirror_stop":
                 await self._mirroring.stop(cast(str, request["session"]))
+            case _:
+                raise ProtocolError("unknown_type")  # in the protocol, not handled by this host
         return {"type": "ok"}
 
     async def _pair_begin(self, device: str) -> None:

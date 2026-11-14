@@ -110,9 +110,11 @@ TV accepts it, and it's what Apple senders and airkast use. Why not the alternat
 | `stream_start` → `stream_started` | extension → host | `device`, `url` (http/https), `media_type` (`file` \| `streaming`), `position?` (s) → `session` |
 | `stream_control` → `ok` | extension → host | `session`, `action` (`pause` \| `resume` \| `seek`), `position?` (required for `seek`) |
 | `stream_stop` → `ok` | extension → host | `session` |
-| `stream_status` (event) | host → extension | `session`, `state` (`loading` \| `playing` \| `paused` \| `ended` \| `failed`), `position?`, `duration?`, `buffered?` (s ahead), `reason?` (error code) |
+| `stream_status` (event) | host → extension | `session`, `state` (`loading` \| `playing` \| `paused` \| `ended` \| `stopped` \| `failed`), `position?`, `duration?`, `buffered?` (s ahead), `reason?` (error code) |
 
-Removed: `play`, `control`, `stop`, `status`. New error code: `stream_failed`.
+Removed: `play`, `control`, `stop`, `status`. New error code: `stream_failed`. `stopped` (added in step 3) is the end
+of the session — `stream_stop`, replaced by another session, or the receiver left — as `mirror_status` has it;
+`ended` is the video reaching its end with the session still open.
 
 ## Security notes
 
@@ -158,7 +160,9 @@ Still open:
    channel. `Control` gains `command()` and event callbacks; `pyatv_control.decode_event` decodes event messages, plain
    or wrapped in `params.data`, up to 256 KiB. The fake TV answers requests on its event channel. Not run on the TV
    yet (the user asked to hold live tests).
-3. Protocol: the `stream_*` messages, the old ones removed, fixtures, `docs/protocol.md`.
+3. ~~Protocol: the `stream_*` messages, the old ones removed, fixtures, `docs/protocol.md`.~~ Done 2026-11-14. Also
+   removed pyatv's `/play` path (`Receivers.play/control/stop`); the host refuses a request it has no handler for
+   with `unknown_type` until step 4 handles `stream_*`.
 4. Host: one session manager for both modes, status polling, `failed` detection.
 5. Extension: background mode choice, stream orchestration, fallback, Bring back.
 6. Popup rebuild: themes, cards, now-playing, Stats for nerds.

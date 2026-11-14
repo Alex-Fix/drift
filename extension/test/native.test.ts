@@ -34,6 +34,20 @@ describe("NativeClient", () => {
     await expect(answer).resolves.toEqual({ v: 1, id: "1", type: "hello", host: "0.1.0" });
   });
 
+  it("resolves stream_start with stream_started", async () => {
+    const port = new FakePort();
+    const client = new NativeClient(() => port);
+    const session = "0123456789abcdef0123456789abcdef";
+    const answer = client.request({
+      type: "stream_start",
+      device: "d",
+      url: "https://example.com/a.m3u8",
+      media_type: "streaming",
+    });
+    port.receive({ v: 1, id: "1", type: "stream_started", session });
+    await expect(answer).resolves.toEqual({ v: 1, id: "1", type: "stream_started", session });
+  });
+
   it("opens the port once for many requests", () => {
     let opened = 0;
     const port = new FakePort();
@@ -43,7 +57,7 @@ describe("NativeClient", () => {
     expect(opened).toBe(1);
   });
 
-  it("forwards status events", () => {
+  it("forwards stream_status events", () => {
     const port = new FakePort();
     const events: HostEvent[] = [];
     const client = new NativeClient(
@@ -51,8 +65,10 @@ describe("NativeClient", () => {
       (e) => events.push(e),
     );
     void client.request({ type: "hello" });
-    port.receive({ v: 1, type: "status", device: "d", state: "playing" });
-    expect(events).toEqual([{ v: 1, type: "status", device: "d", state: "playing" }]);
+    port.receive({ v: 1, type: "stream_status", session: "0123456789abcdef0123456789abcdef", state: "playing" });
+    expect(events).toEqual([
+      { v: 1, type: "stream_status", session: "0123456789abcdef0123456789abcdef", state: "playing" },
+    ]);
   });
 
   it("ignores invalid messages from the host", async () => {

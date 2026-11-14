@@ -29,7 +29,9 @@ describe("parse", () => {
   });
 
   it("rejects an id on an event", () => {
-    expect(() => parse({ v: 1, type: "status", id: "1", device: "d", state: "idle" })).toThrow(ProtocolError);
+    expect(() =>
+      parse({ v: 1, type: "stream_status", id: "1", session: "0123456789abcdef0123456789abcdef", state: "playing" }),
+    ).toThrow(ProtocolError);
   });
 
   it("does not treat inherited properties as message types", () => {
