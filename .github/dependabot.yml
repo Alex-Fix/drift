@@ -16,6 +16,14 @@ updates:
     cooldown: { default-days: 7 }
     groups:
       npm-minor-patch: { update-types: [minor, patch] }
+    ignore:
+      # typescript-eslint (the linter) supports TypeScript up to 6.0 (peer `>=4.8.4 <6.1.0`): with 7, `npm ci` fails.
+      # Lift once typescript-eslint supports 7.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # Follows the Node version drift supports (engines `>=24`, CI on 24): newer types allow APIs Node 24 lacks.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: uv
     directory: /host
@@ -23,3 +31,8 @@ updates:
     cooldown: { default-days: 7 }
     groups:
       uv-minor-patch: { update-types: [minor, patch] }
+    ignore:
+      # srptools 2 breaks pyatv's AirPlay pairing (see the pin in host/pyproject.toml and tests/test_pyatv_compat.py).
+      # Lift when pyatv supports srptools 2.
+      - dependency-name: srptools
+        update-types: ["version-update:semver-major"]
