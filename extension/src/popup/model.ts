@@ -1,5 +1,7 @@
 // The popup's decisions, kept free of the DOM and Chrome APIs so they're unit-tested.
 import { chooseMode } from "../background/cast";
+
+export { seekTarget, toggleAction } from "../background/cast";
 import type { Candidate } from "../content/candidates";
 import type { CastInfo, CaptureStats, MirrorInfo, StreamInfo } from "../messages";
 import type { DeviceInfo } from "../protocol";
@@ -193,17 +195,6 @@ export function progress(info: StreamInfo): { played: number; buffered: number }
   const fraction = (seconds: number) => Math.min(1, Math.max(0, seconds / (info.duration ?? 1)));
   const played = fraction(info.position);
   return { played, buffered: fraction(info.position + (info.buffered ?? 0)) - played };
-}
-
-/** Where ±`delta` seconds lands, kept inside the video; undefined before the receiver reported a position. */
-export function seekTarget(info: StreamInfo, delta: number): number | undefined {
-  if (info.position === undefined) return undefined;
-  const end = info.duration ?? Number.POSITIVE_INFINITY;
-  return Math.min(end, Math.max(0, info.position + delta));
-}
-
-export function toggleAction(info: StreamInfo): "pause" | "resume" {
-  return info.state === "playing" || info.state === "loading" ? "pause" : "resume";
 }
 
 export function statsBadge(info: CastInfo): string {

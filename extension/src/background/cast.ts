@@ -1,4 +1,5 @@
 // "Send to TV" decisions, free of Chrome APIs so they're unit-tested: stream or mirror, and when to fall back.
+import type { StreamInfo } from "../messages";
 import type { MediaType, StreamStatusEvent } from "../protocol";
 
 export type Mode = { mode: "stream"; url: string; mediaType: MediaType } | { mode: "mirror" };
@@ -41,4 +42,15 @@ export function fallsBackOnError(code: string): boolean {
 export function fallsBack(status: Pick<StreamStatusEvent, "state" | "reason">, played: boolean): boolean {
   if (played) return false;
   return status.state === "failed" || (status.state === "stopped" && status.reason !== undefined);
+}
+
+/** Where ±`delta` seconds lands, kept inside the video; undefined before the receiver reported a position. */
+export function seekTarget(info: StreamInfo, delta: number): number | undefined {
+  if (info.position === undefined) return undefined;
+  const end = info.duration ?? Number.POSITIVE_INFINITY;
+  return Math.min(end, Math.max(0, info.position + delta));
+}
+
+export function toggleAction(info: StreamInfo): "pause" | "resume" {
+  return info.state === "playing" || info.state === "loading" ? "pause" : "resume";
 }

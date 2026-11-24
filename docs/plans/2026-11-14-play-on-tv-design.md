@@ -193,5 +193,19 @@ Still open:
      the video bytes the background forwards), host drops, encoder skips, page cost and sound.
    - Decisions are in `popup/model.ts`, unit-tested. All three themes were checked in headless Chrome against the
      mockups, with a stubbed `chrome`.
-7. Page overlay (remote) for streaming and both mirroring modes.
+7. ~~Page overlay (remote) for streaming and both mirroring modes.~~ Done 2026-11-24.
+   - **The remote:** `content/overlay.ts`, injected as `overlay.js` into the video's frame. It is a closed shadow
+     root built with DOM APIs, only trusted clicks count, and it uses the popup's theme (`theme` in storage, or the
+     system's).
+   - **Placement** (`content/overlay-layout.ts`, unit-tested): over the video for streaming and page-path
+     mirroring; a 56 px bar below the video (above if no room, hidden if neither fits) in tab-capture mirroring,
+     so the TV never shows it. It follows scrolls, resizes and fullscreen containers. Small videos drop the tile
+     and the ±10 s buttons.
+   - **Streaming:** the page's video is kept paused. The buttons go to the background as
+     `{kind: "drift-overlay-action", action}`, with actions `toggle`/`back`/`forward`/`bring_back`. That is the
+     one message the background takes from a content script besides media, and only from the frame it put this
+     tab's remote in (`background/overlay.ts`).
+   - **Mirroring:** the buttons drive the page's video directly. `bring_back` stops mirroring, and the capture
+     unmutes the video.
+   - Checked in headless Chrome with a stubbed `chrome`, in all modes and themes and on a small video.
 8. Live checks, README, architecture, security skill.

@@ -25,7 +25,11 @@ for (const file of ["manifest.json", "popup/popup.html", "popup/popup.css", "off
 }
 
 // Injected with executeScript({ files }), which runs classic scripts: bundled as an IIFE, not a module.
-const content = { ...options, entryPoints: { capture: "src/content/capture.ts" }, format: "iife" };
+const content = {
+  ...options,
+  entryPoints: { capture: "src/content/capture.ts", overlay: "src/content/overlay.ts" },
+  format: "iife",
+};
 
 if (watch) {
   await Promise.all([options, content].map(async (o) => (await context(o)).watch()));

@@ -93,3 +93,31 @@ export interface StatsMessage {
 }
 
 export const MEDIA_PORT = "drift-media";
+
+/** How the page remote sits: over the video (stream, page-path mirroring) or docked outside it (tab capture). */
+export type OverlayMode = "stream" | "mirror" | "tab";
+
+/** Background → the remote on the page (content/overlay.ts), in the video's frame. */
+export type OverlayCommand =
+  | { kind: "drift-overlay"; action: "show"; index: number; mode: OverlayMode; receiver: string }
+  | {
+      kind: "drift-overlay";
+      action: "update";
+      state: StreamState;
+      position?: number;
+      duration?: number;
+      buffered?: number;
+    }
+  | { kind: "drift-overlay"; action: "hide" };
+
+/**
+ * The remote → background: a button the user clicked. Fixed actions only, accepted from the frame the background
+ * put the remote in (background/overlay.ts). While mirroring the remote drives the page's own video itself and only
+ * sends `bring_back` (stop mirroring, back to the page with sound).
+ */
+export const OVERLAY_ACTIONS = ["toggle", "back", "forward", "bring_back"] as const;
+export type OverlayAction = (typeof OVERLAY_ACTIONS)[number];
+export interface OverlayActionMessage {
+  kind: "drift-overlay-action";
+  action: OverlayAction;
+}

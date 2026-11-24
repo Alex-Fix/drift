@@ -7,6 +7,9 @@ import {
   type MirrorInfo,
   type OffscreenCommand,
   type OffscreenStarted,
+  type OverlayAction,
+  type OverlayCommand,
+  type OverlayMode,
   type PlacementMessage,
   type PopupCall,
   type PrepareResult,
@@ -15,8 +18,9 @@ import {
 } from "../messages";
 import type { Placement } from "../capture/crop";
 import type { HostEvent, StreamAction, StreamStatusEvent } from "../protocol";
-import { chooseMode, fallsBack, fallsBackOnError } from "./cast";
+import { chooseMode, fallsBack, fallsBackOnError, seekTarget, toggleAction } from "./cast";
 import { Meter, base64Bytes } from "./meter";
+import { parseOverlayAction } from "./overlay";
 import { MirrorSessions } from "./mirror";
 import { HOST_NAME, NativeClient } from "./native";
 
@@ -32,6 +36,8 @@ let offscreenPort: chrome.runtime.Port | undefined;
 const AUDIO = { format: "pcm_s16", rate: 44100, channels: 2 } as const;
 const hostDropped = new Map<string, number>(); // session → frames the host had dropped at its last status
 const meters = new Map<number, Meter>(); // tab → video bytes sent per second (Stats for nerds)
+const overlays = new Map<number, number>(); // tab → frame showing the page remote
+const deviceNames = new Map<string, string>(); // receiver id → name, from the last scan (the remote shows it)
 
 /** A stream the receiver plays itself, and the page video it came from (paused meanwhile). */
 interface Streamed {
@@ -77,6 +83,13 @@ const fromExtensionPage = (sender: chrome.runtime.MessageSender): boolean =>
 
 /** Popup → background. Only extension pages may make requests; content scripts may only send media (below). */
 chrome.runtime.onMessage.addListener((message: PopupCall, sender, sendResponse) => {
+  // The page remote's clicks: fixed actions, only from the frame showing this tab's remote.
+  const action = parseOverlayAction(message);
+  const remoteTab = sender.tab?.id;
+  if (action !== undefined && sender.id === chrome.runtime.id && remoteTab !== undefined) {
+    if (overlays.get(remoteTab) === sender.frameId) void onRemote(remoteTab, action).catch(() => undefined);
+    return false;
+  }
   if (!fromExtensionPage(sender) || typeof message !== "object") return false;
   answer(message).then(
     (result) => {
@@ -91,11 +104,12 @@ chrome.runtime.onMessage.addListener((message: PopupCall, sender, sendResponse) 
 
 async function answer(call: PopupCall): Promise<object> {
   switch (call.kind) {
-    case "host":
+    case "host": {
       // pair_begin waits for the receiver to show its PIN; pair_pin for pairing to finish.
-      return {
-        response: await client.request(call.request, call.request.type.startsWith("pair_") ? 30_000 : undefined),
-      };
+      const response = await client.request(call.request, call.request.type.startsWith("pair_") ? 30_000 : undefined);
+      if (response.type === "devices") for (const d of response.devices) deviceNames.set(d.id, d.name);
+      return { response };
+    }
     case "send":
       return { info: await send(call.tabId, call.frameId, call.index, call.device) };
     case "stop":
@@ -139,6 +153,7 @@ async function send(tabId: number, frameId: number, index: number, device: strin
   const info: StreamInfo = { kind: "stream", title, session, device, mediaType: mode.mediaType, state: "loading" };
   infos.set(tabId, info);
   await inFrame(tabId, frameId, pauseVideo, [index]).catch(() => undefined); // sound and picture on the TV only
+  await showOverlay(tabId, frameId, index, "stream", device);
   return info;
 }
 
@@ -159,8 +174,20 @@ function onStreamStatus(event: StreamStatusEvent): void {
   for (const field of ["position", "duration", "buffered"] as const) {
     if (event[field] !== undefined) info[field] = event[field];
   }
-  if (event.state !== "failed" && event.state !== "stopped") return;
+  if (event.state !== "failed" && event.state !== "stopped") {
+    const { position, duration, buffered } = info;
+    toOverlay(tabId, {
+      kind: "drift-overlay",
+      action: "update",
+      state: event.state,
+      ...(position === undefined ? {} : { position }),
+      ...(duration === undefined ? {} : { duration }),
+      ...(buffered === undefined ? {} : { buffered }),
+    });
+    return;
+  }
   streams.delete(tabId);
+  void hideOverlay(tabId);
   if (fallsBack(event, stream.played)) {
     info.fallingBack = true;
     void fallBackToMirror(tabId, stream, info);
@@ -209,6 +236,7 @@ async function stopStream(tabId: number, why: string): Promise<void> {
   streams.delete(tabId);
   const info = infos.get(tabId);
   if (info?.kind === "stream") info.stopped = why;
+  await hideOverlay(tabId);
   await client.request({ type: "stream_stop", session: stream.session }).catch(() => undefined); // may have ended
 }
 
@@ -220,6 +248,48 @@ async function stopCast(tabId: number, why: string): Promise<void> {
 function streamTab(session: string): number | undefined {
   for (const [tabId, stream] of streams) if (stream.session === session) return tabId;
   return undefined;
+}
+
+// ---- the page remote (content/overlay.ts) -------------------------------------------------------------------------
+
+/** Best effort: the remote is a convenience, and the popup has every control too. */
+async function showOverlay(tabId: number, frameId: number, index: number, mode: OverlayMode, device: string) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["overlay.js"] });
+    overlays.set(tabId, frameId);
+    const receiver = deviceNames.get(device) ?? "the TV";
+    await toFrame(tabId, frameId, { kind: "drift-overlay", action: "show", index, mode, receiver });
+  } catch {
+    overlays.delete(tabId);
+  }
+}
+
+function toOverlay(tabId: number, command: OverlayCommand): void {
+  const frameId = overlays.get(tabId);
+  if (frameId !== undefined) void toFrame(tabId, frameId, command).catch(() => undefined);
+}
+
+async function hideOverlay(tabId: number): Promise<void> {
+  const frameId = overlays.get(tabId);
+  overlays.delete(tabId);
+  if (frameId !== undefined)
+    await toFrame(tabId, frameId, { kind: "drift-overlay", action: "hide" }).catch(() => undefined);
+}
+
+async function onRemote(tabId: number, action: OverlayAction): Promise<void> {
+  if (action === "bring_back") {
+    if (streams.has(tabId)) await bringBack(tabId);
+    else await stopMirror(tabId, "stopped"); // the capture unmutes the page's video: back to the page with sound
+    return;
+  }
+  const info = infos.get(tabId);
+  if (info?.kind !== "stream" || !streams.has(tabId)) return; // while mirroring the remote drives the video itself
+  if (action === "toggle") {
+    await streamControl(tabId, toggleAction(info), undefined);
+    return;
+  }
+  const position = seekTarget(info, action === "back" ? -10 : 10);
+  if (position !== undefined) await streamControl(tabId, "seek", position);
 }
 
 /** Run a self-contained function (content/page.ts, content/candidates.ts) in one frame of the tab. */
@@ -294,7 +364,7 @@ async function startMirror(
   const prepared = await toFrame<PrepareResult>(tabId, frameId, { kind: "drift-capture", action: "prepare", index });
   if (!prepared.ok) {
     if (prepared.error === "capture_failed") {
-      return startTabCapture(tabId, frameId, device, prepared.placement, extra);
+      return startTabCapture(tabId, frameId, index, device, prepared.placement, extra);
     }
     throw new Error(prepared.error);
   }
@@ -305,6 +375,7 @@ async function startMirror(
   const info: MirrorInfo = { kind: "mirror", ...extra, session, device, mode: "page", codec, width, height, fps };
   infos.set(tabId, info);
   await toFrame(tabId, frameId, { kind: "drift-capture", action: "start", session });
+  await showOverlay(tabId, frameId, index, "mirror", device);
   return info;
 }
 
@@ -312,6 +383,7 @@ async function startMirror(
 async function startTabCapture(
   tabId: number,
   frameId: number,
+  index: number,
   device: string,
   placement: Placement | null,
   extra: Pick<MirrorInfo, "fellBack" | "title">,
@@ -337,6 +409,7 @@ async function startTabCapture(
     const info: MirrorInfo = { kind: "mirror", ...extra, session, device, mode: "tab", codec, width, height, fps };
     infos.set(tabId, info);
     await toFrame(tabId, frameId, { kind: "drift-capture", action: "track" });
+    await showOverlay(tabId, frameId, index, "tab", device);
     return info;
   } catch (e) {
     await stopMirror(tabId, "capture_failed");
@@ -375,6 +448,7 @@ async function stopMirror(tabId: number, why: string): Promise<void> {
   if (session === undefined) return;
   const info = infos.get(tabId);
   if (info?.kind === "mirror") info.stopped = why;
+  await hideOverlay(tabId);
   mediaPorts.get(tabId)?.postMessage({ kind: "stop" });
   mediaPorts.delete(tabId);
   if (offscreenTab === tabId) {
@@ -391,8 +465,8 @@ async function stopMirror(tabId: number, why: string): Promise<void> {
   await client.request({ type: "mirror_stop", session }).catch(() => undefined); // may already be stopped
 }
 
-function toFrame<T>(tabId: number, frameId: number, command: CaptureCommand): Promise<T> {
-  return chrome.tabs.sendMessage<CaptureCommand, T>(tabId, command, { frameId });
+function toFrame<T>(tabId: number, frameId: number, command: CaptureCommand | OverlayCommand): Promise<T> {
+  return chrome.tabs.sendMessage<CaptureCommand | OverlayCommand, T>(tabId, command, { frameId });
 }
 
 function isStats(raw: unknown): raw is StatsMessage {
@@ -406,4 +480,5 @@ function isPlacement(raw: unknown): raw is PlacementMessage {
 chrome.tabs.onRemoved.addListener((tabId) => {
   void stopCast(tabId, "tab_closed");
   infos.delete(tabId);
+  overlays.delete(tabId);
 });
