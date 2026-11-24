@@ -4,7 +4,7 @@ import struct
 from collections.abc import Awaitable, Callable
 
 from drift_host import __version__, messaging
-from drift_host.airplay import Action, Device
+from drift_host.airplay import Device
 from drift_host.app import Host, serve
 from drift_host.mirror.session import Control
 from drift_host.protocol import ProtocolError
@@ -19,17 +19,6 @@ class FakeReceivers:
     async def scan(self, listen: float) -> list[Device]:
         return [Device("AA:BB", "Living Room", "Apple TV 4K", mirror=True, paired=True)]
 
-    async def play(self, device: str, url: str, position: float | None) -> None:
-        if device != "AA:BB":
-            raise ProtocolError("unknown_device")
-        self.calls.append(("play", device, url, position))
-
-    async def control(self, device: str, action: Action, position: float | None) -> None:
-        self.calls.append(("control", device, action, position))
-
-    async def stop(self, device: str) -> None:
-        self.calls.append(("stop", device))
-
     tv: FakeTV | None = None
     pin = "4321"
 
@@ -38,6 +27,9 @@ class FakeReceivers:
             raise ProtocolError("unknown_device")
         assert self.tv is not None
         return self.tv
+
+    async def open_playback(self, device: str) -> Control:
+        return await self.open_mirror(device)
 
     async def pair(self, device: str, read_pin: Callable[[], Awaitable[str]]) -> None:
         if device != "AA:BB":
@@ -78,21 +70,21 @@ async def test_scan_lists_receivers() -> None:
     }
 
 
-async def test_play_reaches_the_receiver() -> None:
-    receivers = FakeReceivers()
-    request = {"v": 1, "type": "play", "id": "3", "device": "AA:BB", "url": "https://example.com/a.m3u8"}
-    assert await ask(request, receivers) == {"v": 1, "type": "ok", "id": "3"}
-    assert receivers.calls == [("play", "AA:BB", "https://example.com/a.m3u8", None)]
-
-
 async def test_unknown_device_is_an_error_with_the_request_id() -> None:
-    request = {"v": 1, "type": "play", "id": "3", "device": "nope", "url": "https://example.com/a.mp4"}
+    request = {"v": 1, "type": "pair_begin", "id": "3", "device": "nope"}
     assert await ask(request) == {"v": 1, "type": "error", "id": "3", "code": "unknown_device"}
 
 
 async def test_file_url_never_reaches_the_receiver() -> None:
     receivers = FakeReceivers()
-    request = {"v": 1, "type": "play", "id": "3", "device": "AA:BB", "url": "file:///etc/passwd"}
+    request = {
+        "v": 1,
+        "type": "stream_start",
+        "id": "3",
+        "device": "AA:BB",
+        "url": "file:///etc/passwd",
+        "media_type": "file",
+    }
     assert await ask(request, receivers) == {"v": 1, "type": "error", "id": "3", "code": "unsupported_url"}
     assert receivers.calls == []
 

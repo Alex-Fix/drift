@@ -1,4 +1,4 @@
-"""A fake AirPlay receiver for mirroring tests (shared by the session, video and audio tests)."""
+"""A fake AirPlay receiver for mirroring and playback tests (shared by the session, video, audio and playback tests)."""
 
 import asyncio
 import contextlib
@@ -31,6 +31,7 @@ class FakeTV:
         skip_record: bool = False,
         answer_teardown: bool = False,
         lose_connection_on: str | None = None,
+        answers: dict[str, dict[str, object]] | None = None,
     ) -> None:
         self.refuse = refuse
         self.lose_connection_on = lose_connection_on
@@ -49,6 +50,11 @@ class FakeTV:
         self.audio_control_packets: list[bytes] = []
         self._udp: list[asyncio.DatagramTransport] = []
         self.sender_control_port: int | None = None
+        # Playback: commands received, and the answers to requests by command type (no entry: never answers).
+        self.commands: list[tuple[dict[str, object], str, int]] = []
+        self.answers = answers if answers is not None else {"playbackInfo": {"info": {}}, "seek": {}}
+        self._on_message: Callable[[dict[str, object]], None] | None = None
+        self._on_close: Callable[[], None] | None = None
 
     async def __aenter__(self) -> Self:
         self._server = await asyncio.start_server(self._accept, "127.0.0.1", 0)
@@ -101,8 +107,12 @@ class FakeTV:
         stream = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else None
         if stream is not None and method == "TEARDOWN":
             name = "stream TEARDOWN"
+        elif stream is not None and stream.get("type") == 96:
+            name = "audio SETUP"
+        elif stream is not None and stream.get("type") == 130:
+            name = "playback SETUP"
         elif stream is not None:
-            name = "audio SETUP" if stream.get("type") == 96 else "stream SETUP"
+            name = "stream SETUP"
         else:
             name = "session SETUP" if method == "SETUP" else method
         if uri:
@@ -110,7 +120,7 @@ class FakeTV:
         self.log.append(name)
         if name == self.lose_connection_on:
             raise ConnectionError("receiver connection lost")
-        if method == "RECORD":
+        if method == "RECORD" and "stream SETUP" in self.log:  # mirroring: the data connection comes first
             # The accept callback runs asynchronously, so give an already-open connection a moment to show up; a
             # connection drift only opens after RECORD returns would never appear here.
             with contextlib.suppress(TimeoutError):
@@ -132,13 +142,47 @@ class FakeTV:
             assert self._server
             port = self._server.sockets[0].getsockname()[1]
             return Reply(200, {"streams": [{"type": 110, "dataPort": port}]})
+        if name == "playback SETUP":
+            return Reply(200, {"streams": [{"type": 130, "streamID": 5}]})
         if name == "TEARDOWN" and not self.answer_teardown:
             await asyncio.sleep(3600)  # the Samsung answers the stream TEARDOWN but never the session one
         return Reply(200, {})
 
-    async def open_events(self, port: int) -> None:
+    async def open_events(
+        self,
+        port: int,
+        on_message: Callable[[dict[str, object]], None] | None = None,
+        on_close: Callable[[], None] | None = None,
+    ) -> None:
         self.events_port = port
+        self._on_message, self._on_close = on_message, on_close
         self.log.append("events opened")
+
+    async def command(self, payload: dict[str, object], *, session_id: str, stream_id: int) -> int:
+        self.commands.append((payload, session_id, stream_id))
+        name = f"command {payload.get('type')}"
+        self.log.append(name)
+        if name == self.lose_connection_on:
+            raise ConnectionError("receiver connection lost")
+        if name == self.refuse:
+            return 403
+        answer = self.answers.get(str(payload.get("type")))
+        if payload.get("kind") == "request" and answer is not None:
+            reply = {**answer, "type": payload["type"], "kind": "response", "messageID": payload["messageID"]}
+            asyncio.get_running_loop().call_soon(self.emit, reply)  # answers arrive later, on the event channel
+        return 200
+
+    def emit(self, message: dict[str, object]) -> None:
+        """Send a message on the event channel."""
+        assert self._on_message is not None
+        self._on_message(message)
+
+    def close_events(self) -> None:
+        assert self._on_close is not None
+        self._on_close()
+
+    def command_types(self) -> list[object]:
+        return [payload.get("type") for payload, _, _ in self.commands]
 
     def stream_key(self, stream_connection_id: int) -> bytes:
         return stream_connection_id.to_bytes(32, "big")

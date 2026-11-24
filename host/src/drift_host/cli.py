@@ -45,6 +45,14 @@ def main(argv: list[str] | None = None) -> int:
         "--audio", type=Path, help="WAV (16-bit stereo, 44.1 kHz) played alongside, cut or padded to the clip's length"
     )
     mirror_file.add_argument("clip", type=Path)
+    stream_url = commands.add_parser("stream-url", help="have a receiver play a video URL itself (MP4/MOV or HLS)")
+    stream_url.add_argument("--device", required=True, help="receiver id, as listed by `drift-host scan`")
+    stream_url.add_argument("--seconds", type=float, default=20.0, help="how long to play before stopping (default 20)")
+    stream_url.add_argument("--position", type=float, default=0.0, help="start this many seconds in")
+    stream_url.add_argument(
+        "--controls", action="store_true", help="halfway through: pause 3 s, jump 30 s ahead, resume"
+    )
+    stream_url.add_argument("url", help="http(s) URL of an MP4/MOV file or an HLS playlist (.m3u8)")
     for name in ("install", "uninstall"):
         command = commands.add_parser(name, help=f"{name} the native-messaging host for a browser")
         command.add_argument("--extension-id", required=True, help="the id shown on chrome://extensions")
@@ -61,6 +69,21 @@ def main(argv: list[str] | None = None) -> int:
             logging.getLogger("pyatv").setLevel(logging.WARNING)
             try:
                 return asyncio.run(_mirror_file(parsed.device, parsed.clip, audio=parsed.audio, loop=parsed.loop))
+            except KeyboardInterrupt:
+                return 130
+        case "stream-url":
+            logging.basicConfig(level=logging.INFO, format="%(message)s")
+            logging.getLogger("pyatv").setLevel(logging.WARNING)
+            try:
+                return asyncio.run(
+                    _stream_url(
+                        parsed.device,
+                        parsed.url,
+                        seconds=parsed.seconds,
+                        position=parsed.position,
+                        controls=parsed.controls,
+                    )
+                )
             except KeyboardInterrupt:
                 return 130
         case "install" | "uninstall":
@@ -209,6 +232,62 @@ async def _mirror_file(device: str, path: Path, *, audio: Path | None, loop: boo
         await asyncio.sleep(1)  # let the receiver show the last frames
     except (ProtocolError, MirrorError, ConnectionError, mp4.ClipError) as e:
         print(f"mirroring failed: {e}", file=sys.stderr)
+        return 1
+    finally:
+        if session is not None:
+            await session.stop()
+        await receivers.close()
+    return 0
+
+
+async def _stream_url(device: str, url: str, *, seconds: float, position: float, controls: bool) -> int:
+    from urllib.parse import urlsplit
+
+    from drift_host.playback import MediaType, PlaybackError, PlaybackInfo, PlaybackSession
+    from drift_host.protocol import ProtocolError
+
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        print("the URL must be http(s)", file=sys.stderr)
+        return 1
+    media_type: MediaType = "streaming" if parts.path.lower().endswith(".m3u8") else "file"
+
+    def show(info: PlaybackInfo) -> None:
+        def fmt(value: float | None) -> str:
+            return "—" if value is None else f"{value:.1f}s"
+
+        print(f"  {info.state or '?'}: {fmt(info.position)} / {fmt(info.duration)}, {fmt(info.buffered)} buffered")
+
+    receivers = PyatvReceivers(credentials_path())
+    session: PlaybackSession | None = None
+    try:
+        if device not in {d.id for d in await receivers.scan(4)}:
+            print(f"{device} not found — run `drift-host scan`", file=sys.stderr)
+            return 1
+        session = PlaybackSession(await receivers.open_playback(device), on_state=lambda state: print(f"→ {state}"))
+        await session.start()
+        await session.load(url, media_type, position)
+        print(f"loaded as {media_type}; playing for {seconds:.0f}s")
+        started = time.monotonic()
+        controlled = not controls
+        while (elapsed := time.monotonic() - started) < seconds and not session.ended.is_set():
+            await asyncio.sleep(2)
+            show(await session.info())
+            if not controlled and elapsed >= seconds / 2:
+                controlled = True
+                print("pause")
+                await session.pause()
+                await asyncio.sleep(3)
+                show(await session.info())
+                landed = await session.seek(((await session.info()).position or 0) + 30)
+                print(f"seek +30s → {landed}")
+                print("resume")
+                await session.resume()
+        if session.ended.is_set():
+            print("the receiver ended the session", file=sys.stderr)
+            return 1
+    except (ProtocolError, PlaybackError, ConnectionError, TimeoutError) as e:
+        print(f"playback failed: {e}", file=sys.stderr)
         return 1
     finally:
         if session is not None:

@@ -7,20 +7,102 @@
     <script type="module" src="popup.js"></script>
   </head>
   <body>
-    <header>
-      <h1>drift</h1>
-      <button id="rescan" type="button" title="Search for receivers again" aria-label="Search again">↻</button>
+    <header class="bar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18">
+            <path d="M3 15c3-4 6 4 9 0s6 4 9 0" />
+            <path d="M3 9c3-4 6 4 9 0s6 4 9 0" />
+          </svg>
+        </span>
+        <span class="wordmark">drift</span>
+      </div>
+      <div class="tools">
+        <button id="theme" class="icon" type="button" aria-label="Theme" aria-expanded="false" aria-controls="themes">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 3a9 9 0 0 0 0 18z" class="fill" />
+          </svg>
+        </button>
+        <button id="rescan" class="icon" type="button" aria-label="Search for TVs again">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-3-6.7" />
+            <path d="M21 4v5h-5" />
+          </svg>
+        </button>
+      </div>
     </header>
 
-    <section id="receiver">
-      <label for="devices">AirPlay receiver</label>
-      <select id="devices" disabled>
-        <option>Searching…</option>
-      </select>
-      <div id="pairing" hidden>
-        <p id="pairing-text"></p>
-        <button id="pair-begin" type="button">Pair…</button>
-        <form id="pin-form" hidden>
+    <div id="themes" class="themes" role="radiogroup" aria-label="Theme" hidden></div>
+
+    <section id="now" class="now" hidden aria-live="polite">
+      <p class="state"><span id="now-dot" class="dot"></span><span id="now-state"></span></p>
+      <p id="now-title" class="now-title"></p>
+      <p id="now-detail" class="muted small"></p>
+      <div id="now-progress" class="progress" hidden>
+        <div class="scrub">
+          <div class="track">
+            <div id="now-played" class="played"></div>
+            <div id="now-buffered" class="buffered"></div>
+          </div>
+          <div id="now-knob" class="knob"></div>
+          <input id="now-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Position in the video" />
+        </div>
+        <div class="times"><span id="now-position"></span><span id="now-duration"></span></div>
+      </div>
+      <div id="now-controls" class="controls" hidden>
+        <button id="back10" class="round" type="button" aria-label="Back 10 seconds">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M11 7L6 12l5 5" />
+            <path d="M18 7l-5 5 5 5" />
+          </svg>
+        </button>
+        <button id="toggle" class="round primary" type="button" aria-label="Pause">
+          <svg id="icon-pause" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" class="solid">
+            <rect x="6" y="5" width="4" height="14" rx="1" />
+            <rect x="14" y="5" width="4" height="14" rx="1" />
+          </svg>
+          <svg id="icon-play" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" class="solid" hidden>
+            <path d="M8 5.5v13l11-6.5z" />
+          </svg>
+        </button>
+        <button id="forward10" class="round" type="button" aria-label="Forward 10 seconds">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M13 7l5 5-5 5" />
+            <path d="M6 7l5 5-5 5" />
+          </svg>
+        </button>
+      </div>
+      <div class="now-actions">
+        <button id="bring-back" class="danger" type="button" hidden>Bring back to this computer</button>
+        <button id="stop" class="quiet" type="button" hidden>Stop</button>
+      </div>
+    </section>
+
+    <details id="stats" class="stats" hidden>
+      <summary><span>Stats for nerds</span><span id="stats-badge" class="badge"></span></summary>
+      <svg
+        id="spark"
+        class="spark"
+        viewBox="0 0 320 52"
+        width="320"
+        height="52"
+        role="img"
+        aria-label="Bitrate over the last minute"
+      >
+        <path id="spark-area" class="area" d="" />
+        <path id="spark-line" class="line" d="" />
+      </svg>
+      <dl id="stats-rows" class="rows"></dl>
+    </details>
+
+    <section class="group">
+      <p class="label">Your screens</p>
+      <div id="devices" class="cards" role="radiogroup" aria-label="Receiver"></div>
+      <div id="pairing" class="pairing" hidden>
+        <p id="pairing-text" class="small"></p>
+        <button id="pair-begin" class="secondary" type="button">Pair…</button>
+        <form id="pin-form" class="pin" hidden>
           <input
             id="pin"
             inputmode="numeric"
@@ -31,23 +113,24 @@
             aria-label="PIN shown on the TV"
             required
           />
-          <button type="submit">Pair</button>
-          <button id="pin-cancel" type="button" class="quiet">Cancel</button>
+          <button class="secondary" type="submit">Pair</button>
+          <button id="pin-cancel" class="quiet" type="button">Cancel</button>
         </form>
       </div>
     </section>
 
-    <section id="mirroring" hidden>
-      <p id="mirror-title" class="title"></p>
-      <p id="mirror-detail" class="muted"></p>
-      <button id="stop" type="button">Stop mirroring</button>
+    <section class="group">
+      <p class="label">On this page</p>
+      <div id="videos" class="cards" role="radiogroup" aria-label="Video"></div>
+      <button id="send" class="send" type="button" disabled>
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <rect x="2" y="4" width="20" height="13" rx="2" />
+          <path d="M10 9l4 2.5-4 2.5z" class="fill" />
+        </svg>
+        <span id="send-label">Send to TV</span>
+      </button>
     </section>
 
-    <section>
-      <h2>Videos on this page</h2>
-      <ul id="videos"></ul>
-    </section>
-
-    <footer id="status" role="status"></footer>
+    <footer id="status" class="status" role="status"></footer>
   </body>
 </html>

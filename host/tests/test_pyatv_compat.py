@@ -29,7 +29,8 @@ def test_mirroring_internals_are_where_pyatv_control_expects_them() -> None:
     assert list(inspect.signature(setup_channel).parameters)[:7] == [
         "factory", "verifier", "address", "port", "salt", "output_info", "input_info",
     ]  # fmt: skip
-    assert {"method", "uri", "body", "allow_error"} <= set(inspect.signature(RtspSession.exchange).parameters)
+    exchange = set(inspect.signature(RtspSession.exchange).parameters)
+    assert {"method", "uri", "body", "allow_error", "headers", "protocol"} <= exchange  # playback commands: HTTP/1.1
     assert hasattr(EventChannel, "handle_received") and hasattr(EventChannel, "parse_request")
     assert HttpResponse._fields == ("protocol", "version", "code", "message", "headers", "body")
     for function in (extract_credentials, verify_connection, timing_server, decode_bplist_from_body, http_connect):

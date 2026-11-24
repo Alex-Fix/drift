@@ -19,6 +19,10 @@ Every message is a JSON object with:
 
 Unknown fields are rejected (`invalid_message`), never ignored.
 
+History within `"v": 1`: `play` / `control` / `stop` / `status` (pyatv's `POST /play`, which AirPlay 2 TVs refuse)
+were replaced by the `stream_*` messages (design 2026-11-14). The extension and host ship together and nothing else
+spoke them, so the version stayed 1.
+
 ## Limits
 
 - Extension → host: at most 3 MiB per message — a 2 MiB video chunk, base64-encoded, plus JSON (Chrome allows
@@ -34,13 +38,13 @@ Unknown fields are rejected (`invalid_message`), never ignored.
 |---|---|---|
 | `hello` | — | `hello` with `host` (version string) |
 | `scan` | `timeout_ms` (500–10000, optional, default 3000) | `devices` with `devices: [{ id, name, model? }]` |
-| `play` | `device`, `url` (`http`/`https`), `title?`, `position?` (seconds ≥ 0) | `ok` |
-| `control` | `device`, `action` (`pause` \| `resume` \| `seek`), `position?` (required for `seek`) | `ok` |
-| `stop` | `device` | `ok` |
 | `pair_begin` | `device` | `ok` once the receiver shows its PIN |
 | `pair_pin` | `device`, `pin` (4–8 digits) | `ok` when paired; `pairing_failed` for a wrong PIN or no pairing waiting |
 | `mirror_start` | `device`, `audio?` = `{ format: "pcm_s16", rate: 44100, channels: 2 }` (absent: video only) | `mirror_started` with `session`; replaces a running session |
 | `mirror_stop` | `session` | `ok` |
+| `stream_start` | `device`, `url` (`http`/`https`), `media_type` (`file`: MP4/MOV \| `streaming`: HLS), `position?` (seconds ≥ 0) | `stream_started` with `session`; the receiver fetches the URL itself. Replaces a running session (mirroring or stream) |
+| `stream_control` | `session`, `action` (`pause` \| `resume` \| `seek`), `position?` (seconds; required for `seek`) | `ok` |
+| `stream_stop` | `session` | `ok` |
 
 Any request can instead get `error` with `code` (snake_case constant) and the request's `id`.
 
@@ -48,8 +52,8 @@ Any request can instead get `error` with `code` (snake_case constant) and the re
 
 | Event | Fields |
 |---|---|
-| `status` | `device`, `state` (`idle` \| `loading` \| `playing` \| `paused`), `position?`, `duration?` |
 | `mirror_status` | `session`, `state` (`mirroring` \| `stopped`), `reason?` (an error code; `mirror_failed` when the receiver ended it), `codec?`, `width?`, `height?`, `dropped?` (frames dropped so far) |
+| `stream_status` | `session`, `state` (`loading` \| `playing` \| `paused` \| `ended` \| `stopped` \| `failed`), `reason?` (an error code, with `stopped` / `failed`; `stream_failed` when the receiver couldn't play the URL), `position?`, `duration?` (absent for live streams), `buffered?` (seconds loaded ahead of the position) |
 
 ## Notifications (extension → host, no `id`, no response)
 
@@ -70,6 +74,7 @@ keyframe; `mirror_status.dropped` counts them.
 `invalid_message`, `unsupported_version`, `unknown_type`, `message_too_large`, `unknown_device`,
 `unsupported_url`, `pairing_required`, `device_unreachable`, `internal_error`, `mirror_unsupported` (the receiver
 can't mirror: no Screen feature, or it needs FairPlay), `mirror_failed` (the receiver refused or ended the session),
-`session_unknown`, `pairing_failed`.
+`session_unknown`, `pairing_failed`, `stream_failed` (the receiver refused the URL, couldn't play it, or ended the
+stream session).
 
 Error messages are constant per code; they never echo URLs, headers or page content.

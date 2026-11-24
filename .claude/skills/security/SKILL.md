@@ -38,18 +38,30 @@ same machine (it can talk to the host the same way the browser does).
   the session it issued, caps chunk sizes, never parses payloads beyond framing them, and answers a wrong session
   with one rate-limited `session_unknown`. Worst case: a hostile page corrupts the stream the user started from that
   tab.
+- **Second exception: the page remote** (`content/overlay.ts`). Its clicks reach the background as exactly
+  `{ kind: "drift-overlay-action", action }` with `toggle` / `back` / `forward` / `bring_back`, accepted only from the
+  frame the background put this tab's remote in (`background/overlay.ts`). The remote is a closed shadow root, built
+  with DOM APIs, and counts only trusted clicks. Worst case: a hostile page in that frame pauses, seeks or brings back
+  the video the user sent from it.
 - Page-derived strings are text: `textContent`, never `innerHTML`. CSP stays `script-src 'self'`.
 - Permissions: `activeTab` + `scripting` over broad host permissions; anything new is optional where possible and
   justified in the PR.
-  Current set: `activeTab`, `scripting`, `nativeMessaging`, `storage` (only the last chosen receiver's id, in
-  `chrome.storage.local`: a convenience, nothing sensitive), `tabCapture` + `offscreen` (the fallback: captures
-  only the tab the user mirrors, only after they click Mirror, cropped to the video, and never for DRM video).
+  Current set: `activeTab`, `scripting`, `nativeMessaging`, `storage` (the last chosen receiver's id, the theme and
+  whether Stats for nerds is open, in `chrome.storage.local`: conveniences, nothing sensitive), `tabCapture` +
+  `offscreen` (the fallback: captures only the tab the user mirrors, only after they click Send to TV, cropped to the
+  video, and never for DRM video).
+- The popup shows a page's poster as a thumbnail: http(s) only, loaded with no referrer. It is the same image the page
+  itself loads.
 
 ### Host
 - Every message goes through `protocol.parse` before use; unknown fields/types/versions are errors. Frames over the
   limit end the session before they're read.
 - URLs: `http`/`https` with a host only. When the host itself fetches (relay), resolve the name and refuse loopback,
   link-local and the receiver's own address unless the page itself was served from there.
+- **Play on TV**: the host never fetches the URL; the TV does. A hostile page could make the TV request a LAN
+  address, as with any AirPlay sender: accepted and documented, since only the user's click on Send to TV starts it.
+  Messages from the TV's event channel are decoded only when they are binary plists of at most 256 KiB; answers are
+  matched by `messageID`, anything else is ignored.
 - Never `shell=True`, `os.system` or string commands; ffmpeg runs via `asyncio.create_subprocess_exec` with an
   argument list, input from our relay URL or a pipe, `-protocol_whitelist` restricted.
 - stdout is the message channel: nothing else writes to it. Logs go to the user log dir, contain codes, device ids
@@ -68,8 +80,8 @@ same machine (it can talk to the host the same way the browser does).
 
 ## Review checklist
 - [ ] New/changed message: validated on both sides, fixture added, limits defined?
-- [ ] Media path: can anything but the session's own tab send media, or anything but media come from a content
-      script?
+- [ ] Media path: can anything but the session's own tab send media, or anything but media and the remote's four
+      actions (from the remote's own frame) come from a content script?
 - [ ] Can a page-controlled value reach a filesystem path, a command line, or a URL the host fetches without checks?
 - [ ] Any new extension permission or host-permission pattern — justified, optional if possible?
 - [ ] `innerHTML`, `eval`, `new Function` or remote code anywhere? → reject.

@@ -9,13 +9,13 @@ import asyncio
 import base64
 import binascii
 import contextlib
-import itertools
 import logging
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal, cast
 
+from drift_host import retry
 from drift_host.airplay import Receivers
 from drift_host.mirror.audio import AudioStream
 from drift_host.mirror.clock import ntp_after, ntp_now
@@ -27,10 +27,6 @@ from drift_host.protocol import ProtocolError
 log = logging.getLogger(__name__)
 
 QUEUE_SIZE = 240  # ~2 s of video plus audio at 60 fps
-# The Samsung refuses a new session for ~10-17 s after the previous one (it never answers the session TEARDOWN), so
-# an unreachable receiver is retried for a while; the extension waits RETRY_FOR + margin for mirror_start.
-RETRY_FOR = 30.0
-RETRY_DELAYS = (2.0, 3.0, 4.0, 5.0)  # then 5 s each
 DROP_REPORT_INTERVAL = 2.0  # seconds between mirror_status updates while frames are being dropped
 STATS_INTERVAL = 30.0  # seconds between stats lines in the log (soak tests read them)
 
@@ -85,27 +81,19 @@ class Mirroring:
 
     async def _connect(self, device: str, *, audio: bool) -> MirrorSession:
         """A started session; retries while the receiver is unreachable (e.g. still releasing the last session)."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + RETRY_FOR
-        for attempt in itertools.count():
+
+        async def connect() -> MirrorSession:
+            session = MirrorSession(await self._receivers.open_mirror(device), audio=audio)
             try:
-                control = await self._receivers.open_mirror(device)
-                session = MirrorSession(control, audio=audio)
-                try:
-                    await session.start()
-                except OSError as e:
-                    raise ProtocolError("device_unreachable") from e
-                return session
+                await session.start()
+            except OSError as e:
+                raise ProtocolError("device_unreachable") from e
             except MirrorError as e:
                 log.info("receiver refused mirroring: %s", e)
                 raise ProtocolError("mirror_failed") from e
-            except ProtocolError as e:
-                delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
-                if e.code != "device_unreachable" or loop.time() + delay > deadline:
-                    raise
-                log.info("receiver unreachable; retrying in %.0f s", delay)
-                await asyncio.sleep(delay)
-        raise AssertionError("unreachable")
+            return session
+
+        return await retry.while_unreachable(connect)
 
     async def stop(self, session_id: str) -> None:
         active = self._current(session_id)

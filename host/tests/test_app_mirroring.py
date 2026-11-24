@@ -202,10 +202,10 @@ def _packets(tv: FakeTV) -> list[tuple[int, int]]:
 
 
 async def test_an_unreachable_receiver_is_retried_until_it_accepts(monkeypatch: pytest.MonkeyPatch) -> None:
-    from drift_host import mirroring
+    from drift_host import retry
     from drift_host.protocol import ProtocolError
 
-    monkeypatch.setattr(mirroring, "RETRY_DELAYS", (0.01,))
+    monkeypatch.setattr(retry, "RETRY_DELAYS", (0.01,))
     async with FakeTV(answer_teardown=True) as tv:
         h = Harness(tv)
         refusals = iter([True, True, False])
@@ -222,11 +222,11 @@ async def test_an_unreachable_receiver_is_retried_until_it_accepts(monkeypatch: 
 
 
 async def test_retrying_gives_up_after_the_retry_window(monkeypatch: pytest.MonkeyPatch) -> None:
-    from drift_host import mirroring
+    from drift_host import retry
     from drift_host.protocol import ProtocolError
 
-    monkeypatch.setattr(mirroring, "RETRY_DELAYS", (0.05,))
-    monkeypatch.setattr(mirroring, "RETRY_FOR", 0.2)
+    monkeypatch.setattr(retry, "RETRY_DELAYS", (0.05,))
+    monkeypatch.setattr(retry, "RETRY_FOR", 0.2)
     async with FakeTV() as tv:
         h = Harness(tv)
 

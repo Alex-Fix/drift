@@ -1,0 +1,1 @@
+{ "v": 1, "type": "stream_start", "id": "3", "device": "AA:BB:CC:DD:EE:FF", "url": "https://example.com/movie.mpd", "media_type": "dash" }
