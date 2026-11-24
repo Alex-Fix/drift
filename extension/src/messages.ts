@@ -111,13 +111,13 @@ export type OverlayCommand =
   | { kind: "drift-overlay"; action: "hide" };
 
 /**
- * The remote → background: a button the user clicked. Fixed actions only, accepted from the frame the background
+ * The remote → background: a button the user clicked, or a moment picked on the progress bar. Fixed actions only, accepted from the frame the background
  * put the remote in (background/overlay.ts). While mirroring the remote drives the page's own video itself and only
  * sends `bring_back` (stop mirroring, back to the page with sound).
  */
 export const OVERLAY_ACTIONS = ["toggle", "back", "forward", "bring_back"] as const;
 export type OverlayAction = (typeof OVERLAY_ACTIONS)[number];
-export interface OverlayActionMessage {
-  kind: "drift-overlay-action";
-  action: OverlayAction;
-}
+/** A button, or a jump to `position` seconds from the progress bar. */
+export type OverlayRequest = { action: OverlayAction } | { action: "seek"; position: number };
+export type OverlayActionMessage = { kind: "drift-overlay-action" } & OverlayRequest;
+export const MAX_POSITION = 10_000_000; // seconds (~115 days): beyond any video

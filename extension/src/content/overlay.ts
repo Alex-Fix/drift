@@ -92,6 +92,19 @@ const CSS = `
   font: 600 15px/1.3 var(--title-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .remote:not([data-dock="over"]) .title { font-size: 12px; }
+.scrub { position: relative; width: 100%; padding: 6px 0; }
+.scrub input {
+  all: unset; position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+}
+.scrub input:disabled { cursor: default; }
+.knob {
+  position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 6px;
+  background: var(--accent); opacity: 0; transition: opacity 0.15s; pointer-events: none;
+}
+.scrub:hover .knob, .scrub:focus-within .knob, .scrub.dragging .knob { opacity: 1; }
+.scrub:has(input:disabled) .knob { display: none; }
+.scrub:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .track { position: relative; height: 4px; width: 100%; border-radius: 2px; background: var(--track); overflow: hidden; }
 .played, .buffered { position: absolute; top: 0; bottom: 0; }
 .played { left: 0; background: var(--accent); border-radius: 2px; }
@@ -180,6 +193,10 @@ class Remote {
   private readonly panel = el("div", "remote");
   private readonly title = el("span", "title");
   private readonly played = el("div", "played");
+  private readonly knob = el("div", "knob");
+  private readonly seek = el("input", "");
+  private scrubbing = false; // the user is dragging the bar: updates don't move it meanwhile
+  private length: number | undefined; // the video's length, as last reported
   private readonly buffered = el("div", "buffered");
   private readonly position = el("span", "");
   private readonly duration = el("span", "");
@@ -201,10 +218,15 @@ class Remote {
     state.append(el("span", "dot"), this.title);
     const track = el("div", "track");
     track.append(this.played, this.buffered);
+    const scrub = el("div", "scrub");
+    Object.assign(this.seek, { type: "range", min: "0", max: "1000", step: "1", value: "0" });
+    this.seek.setAttribute("aria-label", "Position in the video");
+    scrub.append(track, this.knob, this.seek);
+    this.scrubber(scrub);
     const times = el("div", "times");
     times.append(this.position, this.duration);
     const info = el("div", "info");
-    info.append(state, track, times);
+    info.append(state, scrub, times);
     const controls = el("div", "controls");
     const back = this.button("back", `Back ${String(SEEK_SECONDS)} seconds`, icon("back", 16));
     const forward = this.button("forward", `Forward ${String(SEEK_SECONDS)} seconds`, icon("forward", 16));
@@ -288,11 +310,49 @@ class Remote {
     const known = position !== undefined && duration !== undefined && duration > 0;
     const played = known ? Math.min(1, position / duration) : 0;
     const ahead = known && buffered !== undefined ? Math.min(1 - played, buffered / duration) : 0;
-    this.played.style.width = `${String(played * 100)}%`;
+    this.length = known ? duration : undefined;
+    this.seek.disabled = !known;
+    if (this.scrubbing) return;
+    this.showPlayed(played);
+    this.seek.value = String(Math.round(played * 1000));
     this.buffered.style.left = `${String(played * 100)}%`;
     this.buffered.style.width = `${String(ahead * 100)}%`;
     this.position.textContent = position === undefined ? "" : clock(position);
     this.duration.textContent = duration === undefined ? (position === undefined ? "" : "live") : clock(duration);
+  }
+
+  private showPlayed(fraction: number): void {
+    this.played.style.width = `${String(fraction * 100)}%`;
+    this.knob.style.left = `${String(fraction * 100)}%`;
+  }
+
+  /** Drag or click the bar (or use the arrow keys on it) to pick a moment; it's sent when let go. */
+  private scrubber(scrub: HTMLElement): void {
+    const picked = () => (this.length === undefined ? undefined : (Number(this.seek.value) / 1000) * this.length);
+    this.seek.addEventListener("input", (event) => {
+      const position = picked();
+      if (!event.isTrusted || position === undefined || this.length === undefined) return;
+      this.scrubbing = true;
+      scrub.classList.add("dragging");
+      this.showPlayed(position / this.length);
+      this.position.textContent = clock(position);
+    });
+    this.seek.addEventListener("change", (event) => {
+      scrub.classList.remove("dragging");
+      this.scrubbing = false;
+      const position = picked();
+      if (!event.isTrusted || position === undefined) return;
+      if (this.mode === "stream") {
+        const message: OverlayActionMessage = { kind: "drift-overlay-action", action: "seek", position };
+        chrome.runtime.sendMessage(message).catch(() => undefined);
+      } else {
+        this.video.currentTime = position; // mirroring: the TV shows what the page's video plays
+      }
+    });
+    // Keys on the remote are the remote's: the page's own shortcuts (e.g. arrows to seek) mustn't fire as well.
+    this.panel.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+    });
   }
 
   private button(className: string, label: string, content: Node): HTMLButtonElement {

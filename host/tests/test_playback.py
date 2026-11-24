@@ -303,3 +303,43 @@ async def test_an_error_about_the_item_fails_it() -> None:
         tv.emit({"type": "error", "uuid": item["uuid"], "error": {"code": -12927}, "playbackState": "loading"})
         assert states == ["failed"]
         await session.stop()
+
+
+async def test_the_samsungs_stopped_after_the_end_is_ended_too() -> None:
+    states: list[State] = []
+    async with FakeTV() as tv:
+        session = await started(tv, on_state=states.append)
+        await session.load(URL, "file")
+        tv.emit({"type": "playbackState", "name": "stopped", "reason": "ended"})
+        tv.emit({"type": "playbackState", "name": "stopped"})  # without the reason: not the end
+        assert states == ["ended"]
+        await session.stop()
+
+
+async def test_replay_plays_the_finished_item_then_seeks_once_it_plays() -> None:
+    async with FakeTV(answers={"seek": {"position": ms(12000)}}) as tv:
+        session = await started(tv)
+        with pytest.raises(PlaybackError, match="nothing loaded"):
+            await session.replay()
+        await session.load(URL, "file", position=30)
+        item = tv.commands[0][0]["item"]
+        tv.emit({"type": "notification", "name": "itemPlayedToEnd", "item": item})
+        replaying = asyncio.create_task(session.replay(12))
+        await eventually(lambda: tv.command_types().count("setRate") == 2)  # load's, then replay's
+        assert tv.commands[-1][0] == {"type": "setRate", "rate": 1.0}
+        assert "seek" not in tv.command_types()  # not before it plays again
+        tv.emit({"type": "playbackState", "name": "playing", "item": item})
+        await replaying
+        assert tv.commands[-1][0]["type"] == "seek" and tv.commands[-1][0]["time"] == ms(12000)
+        assert tv.command_types().count("insertPlayQueueItem") == 1  # the Samsung ignores a second one
+        await session.stop()
+
+
+async def test_replay_gives_up_when_the_receiver_doesnt_play_again() -> None:
+    async with FakeTV() as tv:
+        session = PlaybackSession(tv, timings=Timings(reply=0.2, teardown=0.1, replay=0.05))
+        await session.start()
+        await session.load(URL, "file")
+        with pytest.raises(PlaybackError, match="did not play the item again"):
+            await session.replay()
+        await session.stop()

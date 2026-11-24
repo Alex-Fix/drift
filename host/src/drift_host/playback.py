@@ -34,6 +34,7 @@ class PlaybackError(Exception):
 @dataclass(frozen=True)
 class Timings:
     reply: float = 3.0
+    replay: float = 8.0  # for the receiver to play a finished item again
     teardown: float = 2.0  # the Samsung never answers the session TEARDOWN
 
 
@@ -99,6 +100,7 @@ class PlaybackSession:
         self._ids = itertools.count(1)
         self._pending: dict[int, asyncio.Future[dict[str, object]]] = {}
         self._item: str | None = None
+        self._playing = asyncio.Event()  # set on each change to "playing"
         self._taken = asyncio.Event()
         self.state: State | None = None
 
@@ -183,6 +185,20 @@ class PlaybackSession:
         )
         await self._command({"type": "setProperty", "property": "actionAtItemEnd", "value": 1})
         await self._command({"type": "setRate", "rate": 1.0})
+
+    async def replay(self, position: float = 0.0) -> None:
+        """Play the item again from `position` after its end. The Samsung (2026-11-24) answers no seek once an item
+        ended and ignores a new insertPlayQueueItem; play restarts the finished item from where it was loaded, and a
+        seek works again once it plays."""
+        if self._item is None:
+            raise PlaybackError("nothing loaded")
+        self._playing.clear()
+        await self.resume()
+        try:
+            await asyncio.wait_for(self._playing.wait(), self._timings.replay)
+        except TimeoutError as e:
+            raise PlaybackError("receiver did not play the item again") from e
+        await self.seek(position)
 
     async def pause(self) -> None:
         await self._command({"type": "setRate", "rate": 0.0})
@@ -280,6 +296,8 @@ class PlaybackSession:
             self._set_state(state)
         elif kind == "notification" and name == "itemPlayedToEnd" and _item_uuid(message, "item") == self._item:
             self._set_state("ended")
+        elif kind == "playbackState" and name == "stopped" and message.get("reason") == "ended":
+            self._set_state("ended")  # the Samsung's next message after itemPlayedToEnd
         elif kind == "error" and self._item is not None and message.get("uuid") == self._item:
             error = message.get("error")
             code = error.get("code") if isinstance(error, dict) else None
@@ -290,6 +308,8 @@ class PlaybackSession:
         if state == self.state:
             return
         self.state = state
+        if state == "playing":
+            self._playing.set()
         log.info("playback %s", state)
         if self._on_state is not None:
             self._on_state(state)

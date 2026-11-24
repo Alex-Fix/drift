@@ -218,5 +218,16 @@ Still open:
      -12927}, uuid: <item>}`, then `itemRemoved` / `currentItemChanged` (`ReasonAdvanceDueToError`); as `streaming`
      it just stays loading. `PlaybackSession` now turns that error into `failed`, which ends the stream at once (the
      extension then mirrors) instead of at the 8 s deadline. Confirmed live.
-   - Still to check in the browser: Send to TV on a page (stream and mirror), the fallback, the page remote in
-     all three modes, Bring back, the themes.
+   - In the browser (the user, 2026-11-24): streaming, the fallback, mirroring, the remote and the themes work.
+     Two gaps they found, both fixed:
+     - **No way to pick a moment.** The progress bars in the popup and on the page remote are now range inputs:
+       drag, click or arrow keys, with a live time preview, sent on release. The remote sends
+       `{action: "seek", position}`, validated like its other actions (finite, 0 to 10⁷ s), and keys on the remote
+       no longer reach the page's own shortcuts. While mirroring, the bar drives the page's video directly.
+     - **No replay after the end.** At the end of an item the Samsung sends `itemPlayedToEnd`, then
+       `playbackState stopped` with `reason: "ended"`, and reads position and length as 0. After that it answers no
+       seek and ignores a new `insertPlayQueueItem`: play restarts the finished item from where it was first loaded.
+       Checked live on HLS: re-queueing replayed from 592 s instead of 60 s, while play, wait for "playing", then seek
+       landed at 60.0 s. So `PlaybackSession.replay(position)` does exactly that. `Streaming` turns play, seek and
+       ±10 s after the end into a replay (answered at once, with status `loading`; `ended` again if the TV doesn't
+       play within 8 s), and keeps the last real position and length rather than the zeros.

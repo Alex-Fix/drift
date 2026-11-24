@@ -54,6 +54,8 @@ const ui = {
   nowDetail: $("now-detail", HTMLParagraphElement),
   nowProgress: $("now-progress", HTMLDivElement),
   nowPlayed: $("now-played", HTMLDivElement),
+  nowKnob: $("now-knob", HTMLDivElement),
+  nowSeek: $("now-seek", HTMLInputElement),
   nowBuffered: $("now-buffered", HTMLDivElement),
   nowPosition: $("now-position", HTMLSpanElement),
   nowDuration: $("now-duration", HTMLSpanElement),
@@ -91,6 +93,7 @@ let videos: Located[] = [];
 let video: number | undefined;
 let info: CastInfo | undefined;
 let busy = false;
+let scrubbing = false; // the user is dragging the progress bar: status updates don't move it meanwhile
 
 // ---- background --------------------------------------------------------------------------------------------------
 
@@ -442,10 +445,11 @@ function renderNow(): void {
   const live = running && stream !== undefined && stream.fallingBack !== true ? stream : undefined;
   const bar = live === undefined ? undefined : progress(live);
   ui.nowProgress.hidden = bar === undefined;
-  if (bar !== undefined && live !== undefined) {
-    ui.nowPlayed.style.width = `${String(bar.played * 100)}%`;
+  if (bar !== undefined && live !== undefined && !scrubbing) {
+    showPlayed(bar.played);
     ui.nowBuffered.style.left = `${String(bar.played * 100)}%`;
     ui.nowBuffered.style.width = `${String(bar.buffered * 100)}%`;
+    ui.nowSeek.value = String(Math.round(bar.played * 1000));
     ui.nowPosition.textContent = clock(live.position ?? 0);
     ui.nowDuration.textContent = clock(live.duration ?? 0);
   }
@@ -462,6 +466,44 @@ function renderNow(): void {
   ui.stop.textContent = info.kind === "mirror" ? "Stop mirroring" : "Stop";
   ui.stop.className = info.kind === "mirror" ? "danger" : "quiet"; // the only action while mirroring
 }
+
+function showPlayed(fraction: number): void {
+  ui.nowPlayed.style.width = `${String(fraction * 100)}%`;
+  ui.nowKnob.style.left = `${String(fraction * 100)}%`;
+}
+
+/** The moment the progress bar's thumb points at, in seconds (streams with a known length only). */
+function scrubbed(): number | undefined {
+  if (info?.kind !== "stream" || info.duration === undefined) return undefined;
+  return (Number(ui.nowSeek.value) / 1000) * info.duration;
+}
+
+ui.nowSeek.addEventListener("input", () => {
+  const position = scrubbed();
+  if (position === undefined || info?.kind !== "stream" || info.duration === undefined) return;
+  scrubbing = true;
+  ui.nowSeek.parentElement?.classList.add("dragging");
+  showPlayed(position / info.duration);
+  ui.nowPosition.textContent = clock(position);
+});
+
+ui.nowSeek.addEventListener("change", () => {
+  const position = scrubbed();
+  ui.nowSeek.parentElement?.classList.remove("dragging");
+  if (position === undefined) {
+    scrubbing = false;
+    return;
+  }
+  void activeTab()
+    .then(async (tabId) => {
+      if (tabId !== undefined) await background({ kind: "stream_control", tabId, action: "seek", position });
+    })
+    .catch(sayError)
+    .finally(() => {
+      scrubbing = false;
+      void refresh().catch(() => undefined);
+    });
+});
 
 function renderStats(): void {
   const running = info !== undefined && info.stopped === undefined;

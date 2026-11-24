@@ -86,6 +86,9 @@ class Streaming:
     async def control(self, session_id: str, action: Action, position: float | None) -> None:
         active = self._current(session_id)
         try:
+            if active.state == "ended":
+                await self._replay(active, action, position)
+                return
             match action:
                 case "pause":
                     await active.session.pause()
@@ -96,6 +99,25 @@ class Streaming:
         except PlaybackError as e:
             log.info("receiver refused %s: %s", action, e)
             raise ProtocolError("stream_failed") from e
+
+    async def _replay(self, active: _Active, action: Action, position: float | None) -> None:
+        """After the end the receiver has let go of the video: play and seek queue it again; pause does nothing."""
+        if action == "pause":
+            return
+        start = position if action == "seek" and position is not None else 0.0
+        active.state = "loading"
+        self._status(active)
+        # Answer now: the receiver takes a few seconds to play again, and the stream's status shows how it goes.
+        active.tasks.append(asyncio.create_task(self._replaying(active, start)))
+
+    async def _replaying(self, active: _Active, start: float) -> None:
+        try:
+            await active.session.replay(start)
+        except PlaybackError as e:
+            log.info("couldn't play it again: %s", e)
+            if not active.stopping:
+                active.state = "ended"
+                self._status(active)
 
     async def stop(self, session_id: str) -> None:
         await self._end(self._current(session_id), "stopped", reason=None)
@@ -129,8 +151,10 @@ class Streaming:
             except PlaybackError:
                 log.debug("no playback info", exc_info=True)  # the session ending is _watch's to report
                 continue
+            if active.state == "ended" or info.duration == 0:
+                continue  # the receiver dropped the item: its position and length read 0; keep the last ones
             active.info = info
-            if info.state is not None and active.state != "ended":
+            if info.state is not None:
                 if info.state == "playing":
                     active.playing.set()
                 active.state = info.state
@@ -179,7 +203,9 @@ class Streaming:
 
 
 def _at_end(info: PlaybackInfo) -> bool:
-    return info.duration is not None and info.position is not None and info.position >= info.duration - END_SLACK
+    if info.duration is None or info.position is None or info.duration <= END_SLACK:
+        return False
+    return info.position >= info.duration - END_SLACK
 
 
 def _event(

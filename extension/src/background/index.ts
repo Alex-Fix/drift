@@ -7,7 +7,7 @@ import {
   type MirrorInfo,
   type OffscreenCommand,
   type OffscreenStarted,
-  type OverlayAction,
+  type OverlayRequest,
   type OverlayCommand,
   type OverlayMode,
   type PlacementMessage,
@@ -84,10 +84,10 @@ const fromExtensionPage = (sender: chrome.runtime.MessageSender): boolean =>
 /** Popup → background. Only extension pages may make requests; content scripts may only send media (below). */
 chrome.runtime.onMessage.addListener((message: PopupCall, sender, sendResponse) => {
   // The page remote's clicks: fixed actions, only from the frame showing this tab's remote.
-  const action = parseOverlayAction(message);
+  const request = parseOverlayAction(message);
   const remoteTab = sender.tab?.id;
-  if (action !== undefined && sender.id === chrome.runtime.id && remoteTab !== undefined) {
-    if (overlays.get(remoteTab) === sender.frameId) void onRemote(remoteTab, action).catch(() => undefined);
+  if (request !== undefined && sender.id === chrome.runtime.id && remoteTab !== undefined) {
+    if (overlays.get(remoteTab) === sender.frameId) void onRemote(remoteTab, request).catch(() => undefined);
     return false;
   }
   if (!fromExtensionPage(sender) || typeof message !== "object") return false;
@@ -276,7 +276,8 @@ async function hideOverlay(tabId: number): Promise<void> {
     await toFrame(tabId, frameId, { kind: "drift-overlay", action: "hide" }).catch(() => undefined);
 }
 
-async function onRemote(tabId: number, action: OverlayAction): Promise<void> {
+async function onRemote(tabId: number, request: OverlayRequest): Promise<void> {
+  const { action } = request;
   if (action === "bring_back") {
     if (streams.has(tabId)) await bringBack(tabId);
     else await stopMirror(tabId, "stopped"); // the capture unmutes the page's video: back to the page with sound
@@ -286,6 +287,10 @@ async function onRemote(tabId: number, action: OverlayAction): Promise<void> {
   if (info?.kind !== "stream" || !streams.has(tabId)) return; // while mirroring the remote drives the video itself
   if (action === "toggle") {
     await streamControl(tabId, toggleAction(info), undefined);
+    return;
+  }
+  if (action === "seek") {
+    await streamControl(tabId, "seek", Math.min(request.position, info.duration ?? request.position));
     return;
   }
   const position = seekTarget(info, action === "back" ? -10 : 10);

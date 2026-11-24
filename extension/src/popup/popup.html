@@ -40,9 +40,13 @@
       <p id="now-title" class="now-title"></p>
       <p id="now-detail" class="muted small"></p>
       <div id="now-progress" class="progress" hidden>
-        <div class="track">
-          <div id="now-played" class="played"></div>
-          <div id="now-buffered" class="buffered"></div>
+        <div class="scrub">
+          <div class="track">
+            <div id="now-played" class="played"></div>
+            <div id="now-buffered" class="buffered"></div>
+          </div>
+          <div id="now-knob" class="knob"></div>
+          <input id="now-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Position in the video" />
         </div>
         <div class="times"><span id="now-position"></span><span id="now-duration"></span></div>
       </div>

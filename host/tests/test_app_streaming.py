@@ -260,3 +260,58 @@ async def test_the_receiver_refusing_the_url_fails_the_stream_at_once() -> None:
         assert h.of_type("stream_status")[-1]["reason"] == "stream_failed"
         assert tv.closed
         await h.host.close()
+
+
+async def test_play_after_the_end_plays_it_again_from_the_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(streaming, "POLL_INTERVAL", 0.01)
+    # After the end the Samsung reports nothing useful: position and length 0.
+    gone = {"rate": 0, "position": ms(0), "duration": ms(0)}
+    async with FakeTV(answer_teardown=True, answers={"playbackInfo": {"info": gone}, "seek": {}}) as tv:
+        h = Harness(tv)
+        session = await start(h, position=590)
+        uuid = {"uuid": item(tv)["uuid"]}
+        tv.emit({"type": "notification", "name": "itemPlayedToEnd", "item": uuid})
+        tv.emit({"type": "playbackState", "name": "stopped", "reason": "ended"})
+        await asyncio.sleep(0.05)
+        assert statuses(h)[-1] == (session, "ended")
+        assert "duration" not in h.of_type("stream_status")[-1]  # never the receiver's zeros
+        reply = await h.ask({"type": "stream_control", "id": "c", "session": session, "action": "resume"})
+        assert reply["type"] == "ok"  # answered at once; the replay goes on in the background
+        assert statuses(h)[-1] == (session, "loading")
+        await eventually(lambda: tv.command_types().count("setRate") == 2)
+        tv.emit({"type": "playbackState", "name": "playing", "item": uuid})
+        await eventually(lambda: "seek" in tv.command_types())  # polls go on meanwhile
+        assert next(p for p, _, _ in tv.commands if p["type"] == "seek")["time"] == ms(0)
+        assert tv.command_types().count("insertPlayQueueItem") == 1
+        await h.host.close()
+
+
+async def test_seeking_after_the_end_replays_from_there() -> None:
+    async with FakeTV(answer_teardown=True) as tv:
+        h = Harness(tv)
+        session = await start(h)
+        uuid = {"uuid": item(tv)["uuid"]}
+        tv.emit({"type": "notification", "name": "itemPlayedToEnd", "item": uuid})
+        reply = await h.ask({"type": "stream_control", "id": "c", "session": session, "action": "seek", "position": 42})
+        assert reply["type"] == "ok"
+        await eventually(lambda: tv.command_types().count("setRate") == 2)
+        tv.emit({"type": "playbackState", "name": "playing", "item": uuid})
+        await eventually(lambda: tv.command_types()[-1] == "seek")
+        assert tv.commands[-1][0]["time"] == ms(42000)
+        await h.host.close()
+
+
+async def test_a_replay_the_receiver_doesnt_take_shows_ended_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    import functools
+
+    from drift_host import playback
+
+    quick = playback.Timings(reply=0.2, teardown=0.1, replay=0.05)
+    monkeypatch.setattr(streaming, "PlaybackSession", functools.partial(playback.PlaybackSession, timings=quick))
+    async with FakeTV(answer_teardown=True) as tv:
+        h = Harness(tv)
+        session = await start(h)
+        tv.emit({"type": "notification", "name": "itemPlayedToEnd", "item": {"uuid": item(tv)["uuid"]}})
+        await h.ask({"type": "stream_control", "id": "c", "session": session, "action": "resume"})
+        await eventually(lambda: statuses(h)[-1] == (session, "ended") and len(statuses(h)) >= 4)
+        await h.host.close()
