@@ -289,3 +289,17 @@ def test_buffered_ahead_uses_the_range_holding_the_position() -> None:
     assert buffered_ahead(ranges, None) is None
     assert buffered_ahead("ranges", 10) is None
     assert buffered_ahead([{"start": "x"}, 5], 10) == 0
+
+
+async def test_an_error_about_the_item_fails_it() -> None:
+    states: list[State] = []
+    async with FakeTV() as tv:
+        session = await started(tv, on_state=states.append)
+        await session.load(URL, "file")
+        item = tv.commands[0][0]["item"]
+        assert isinstance(item, dict)
+        tv.emit({"type": "error", "uuid": "SOMEONE-ELSES", "error": {"code": -12927}})
+        assert states == []
+        tv.emit({"type": "error", "uuid": item["uuid"], "error": {"code": -12927}, "playbackState": "loading"})
+        assert states == ["failed"]
+        await session.stop()

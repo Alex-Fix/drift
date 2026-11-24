@@ -22,7 +22,9 @@ log = logging.getLogger(__name__)
 
 CLIENT_TYPE = "A6B27562-B43A-4F2D-B75F-82391E250194"  # the URL-playback client type Apple senders use
 MediaType = Literal["file", "streaming"]  # `file`: MP4/MOV; `streaming`: HLS
-State = Literal["loading", "playing", "paused", "ended"]  # "ended" comes from itemPlayedToEnd, not playbackState
+# "ended" comes from itemPlayedToEnd, "failed" from an error about the item (e.g. -12927 for an MP4 the Samsung can't
+# open); the rest from playbackState.
+State = Literal["loading", "playing", "paused", "ended", "failed"]
 
 
 class PlaybackError(Exception):
@@ -278,6 +280,11 @@ class PlaybackSession:
             self._set_state(state)
         elif kind == "notification" and name == "itemPlayedToEnd" and _item_uuid(message, "item") == self._item:
             self._set_state("ended")
+        elif kind == "error" and self._item is not None and message.get("uuid") == self._item:
+            error = message.get("error")
+            code = error.get("code") if isinstance(error, dict) else None
+            log.info("receiver can't play the item (%s)", code if isinstance(code, int) else "no code")
+            self._set_state("failed")
 
     def _set_state(self, state: State) -> None:
         if state == self.state:

@@ -249,3 +249,14 @@ async def test_closing_the_host_stops_the_stream() -> None:
         session = await start(h)
         await h.host.close()
         assert statuses(h)[-1] == (session, "stopped") and tv.closed
+
+
+async def test_the_receiver_refusing_the_url_fails_the_stream_at_once() -> None:
+    async with FakeTV(answer_teardown=True) as tv:
+        h = Harness(tv)
+        session = await start(h)
+        tv.emit({"type": "error", "uuid": item(tv)["uuid"], "error": {"code": -12927}})  # Samsung: can't open it
+        await eventually(lambda: statuses(h)[-1] == (session, "failed"))
+        assert h.of_type("stream_status")[-1]["reason"] == "stream_failed"
+        assert tv.closed
+        await h.host.close()

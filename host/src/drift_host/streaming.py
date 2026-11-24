@@ -56,11 +56,16 @@ class Streaming:
             log.info("receiver refused the stream: %s", e)
             await self._end(active, "failed", reason="stream_failed", report=False)
             raise ProtocolError("stream_failed") from e
-        active.tasks = [
-            asyncio.create_task(self._poll(active)),
-            asyncio.create_task(self._watch(active)),
-            asyncio.create_task(self._deadline(active)),
-        ]
+        await asyncio.sleep(0)  # let an error the receiver sent while loading end the session first
+        if active.stopping:
+            raise ProtocolError("stream_failed")
+        active.tasks.extend(
+            [
+                asyncio.create_task(self._poll(active)),
+                asyncio.create_task(self._watch(active)),
+                asyncio.create_task(self._deadline(active)),
+            ]
+        )
         self._status(active)
         return active.id
 
@@ -106,6 +111,9 @@ class Streaming:
 
     def _on_state(self, active: _Active, state: State) -> None:
         if active.stopping:
+            return
+        if state == "failed":  # the receiver gave up on the URL: end now rather than at START_TIMEOUT
+            active.tasks.append(asyncio.create_task(self._end(active, "failed", reason="stream_failed")))
             return
         if state == "playing":
             active.playing.set()

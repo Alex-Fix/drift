@@ -208,4 +208,15 @@ Still open:
    - **Mirroring:** the buttons drive the page's video directly. `bring_back` stops mirroring, and the capture
      unmutes the video.
    - Checked in headless Chrome with a stubbed `chrome`, in all modes and themes and on a small video.
-8. Live checks, README, architecture, security skill.
+8. Live checks, README, architecture, security skill. Docs done 2026-11-24 (README, `architecture.md` with a Play on
+   TV diagram, the `security` skill's second content-script exception). `drift-host stream-url` plays a URL
+   without the browser (`--controls`: pause, +30 s, resume). Live checks on the Samsung, 2026-11-24:
+   - Apple's bipbop HLS, through the host engine: loading → playing; pause → `paused`; a seek landed exactly
+     (6.2 s → 36.2 s); resume → `playing`; position/length/buffer every 2 s; stop. ✅
+   - A small MP4 (test-videos.co.uk, 720p, 10 s) as `file`: playing at once with its length. ✅
+   - Google's `BigBuckBunny.mp4` (1080p, about 150 MB): the TV refuses it. It sends `{type: "error", error: {code:
+     -12927}, uuid: <item>}`, then `itemRemoved` / `currentItemChanged` (`ReasonAdvanceDueToError`); as `streaming`
+     it just stays loading. `PlaybackSession` now turns that error into `failed`, which ends the stream at once (the
+     extension then mirrors) instead of at the 8 s deadline. Confirmed live.
+   - Still to check in the browser: Send to TV on a page (stream and mirror), the fallback, the page remote in
+     all three modes, Bring back, the themes.
