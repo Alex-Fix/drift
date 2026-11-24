@@ -16,6 +16,7 @@ export type CastInfo = MirrorInfo | StreamInfo;
 
 export interface StreamInfo {
   kind: "stream";
+  title: string; // the page's title (page data: shown as text only)
   session: string;
   device: string;
   mediaType: MediaType;
@@ -30,6 +31,7 @@ export interface StreamInfo {
 export interface MirrorInfo {
   kind: "mirror";
   fellBack?: boolean; // streaming wasn't possible, so this mirrors instead
+  title: string; // the page's title (page data: shown as text only)
   session: string;
   device: string;
   mode: "page" | "tab"; // captureStream() in the page, or the tab-capture fallback
@@ -38,6 +40,8 @@ export interface MirrorInfo {
   height: number;
   fps: number;
   stats?: CaptureStats;
+  bitrate?: number[]; // Mbit/s sent per second over the last minute, oldest first (filled in when the popup asks)
+  hostDropped?: number; // frames the host dropped because the receiver or network couldn't keep up
   stopped?: string; // why, once the session ended
 }
 

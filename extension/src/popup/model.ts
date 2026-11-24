@@ -151,3 +151,101 @@ function statsLine(stats: CaptureStats | undefined): string[] {
   if (stats.longTasks > 0) parts.push(`${String(stats.longTasks)} long tasks`);
   return parts;
 }
+
+// ---- the redesigned popup (Play on TV design, implementation step 6) ----------------------------------------------
+
+export type ThemeChoice = "auto" | "midnight" | "daylight" | "neon";
+
+/** "auto" follows the system: Midnight Glass when it's dark, Daylight when it's light. */
+export const THEMES: readonly { id: ThemeChoice; name: string }[] = [
+  { id: "auto", name: "Match the system" },
+  { id: "midnight", name: "Midnight Glass" },
+  { id: "daylight", name: "Daylight" },
+  { id: "neon", name: "Neon Cinema" },
+];
+
+export function parseTheme(value: unknown): ThemeChoice {
+  return THEMES.find((theme) => theme.id === value)?.id ?? "auto";
+}
+
+/** The line under a receiver's name. */
+export function deviceDetail(device: DeviceInfo): string {
+  const parts = [device.model ?? "AirPlay", device.paired === false ? "not paired" : "paired"];
+  if (device.mirror === false) parts.push("can't mirror");
+  return parts.join(" · ");
+}
+
+export function modeBadge(video: Pick<Candidate, "url" | "mime">): string {
+  return chooseMode(video).mode === "stream" ? "Full quality · TV streams it" : "Mirrored from this tab";
+}
+
+/** The video to preselect: the first one playing, else the first one drift may send. */
+export function pickVideo(videos: readonly Pick<Candidate, "drm" | "playing">[]): number | undefined {
+  const index = videos.findIndex((v) => v.playing && !v.drm);
+  if (index >= 0) return index;
+  const sendable = videos.findIndex((v) => !v.drm);
+  return sendable >= 0 ? sendable : videos.length > 0 ? 0 : undefined;
+}
+
+/** How much of the stream has played and how much more is loaded, as fractions of its length (none when live). */
+export function progress(info: StreamInfo): { played: number; buffered: number } | undefined {
+  if (info.duration === undefined || info.duration <= 0 || info.position === undefined) return undefined;
+  const fraction = (seconds: number) => Math.min(1, Math.max(0, seconds / (info.duration ?? 1)));
+  const played = fraction(info.position);
+  return { played, buffered: fraction(info.position + (info.buffered ?? 0)) - played };
+}
+
+/** Where ±`delta` seconds lands, kept inside the video; undefined before the receiver reported a position. */
+export function seekTarget(info: StreamInfo, delta: number): number | undefined {
+  if (info.position === undefined) return undefined;
+  const end = info.duration ?? Number.POSITIVE_INFINITY;
+  return Math.min(end, Math.max(0, info.position + delta));
+}
+
+export function toggleAction(info: StreamInfo): "pause" | "resume" {
+  return info.state === "playing" || info.state === "loading" ? "pause" : "resume";
+}
+
+export function statsBadge(info: CastInfo): string {
+  if (info.kind === "stream") return "TV streams it";
+  return info.mode === "tab" ? "Mirroring · tab capture" : "Mirroring";
+}
+
+/** Stats for nerds: label → value rows. */
+export function statRows(info: CastInfo): [string, string][] {
+  if (info.kind === "stream") {
+    return [
+      ["State", info.state],
+      ["Format", info.mediaType === "streaming" ? "HLS" : "File"],
+      ["Position", info.position === undefined ? "—" : clock(info.position)],
+      ["Length", info.duration === undefined ? "live" : clock(info.duration)],
+      ["Buffered", info.buffered === undefined ? "—" : `+${String(Math.round(info.buffered))} s`],
+    ];
+  }
+  const codec = info.codec === "hevc" ? "HEVC" : "H.264";
+  const quality =
+    info.stats?.quality ?? `${codec} ${String(info.width)}×${String(info.height)} @ ${String(info.fps)} fps`;
+  const latest = [...(info.bitrate ?? [])].reverse().find((mbps) => mbps > 0);
+  const stats = info.stats;
+  return [
+    ["Quality", quality],
+    ["Bitrate", latest === undefined ? "—" : `${latest.toFixed(1)} Mbit/s`],
+    ["Dropped", String(info.hostDropped ?? 0)],
+    ["Skipped", String(stats?.droppedByEncoder ?? 0)],
+    ["Page cost", stats === undefined ? "—" : `${String(stats.sendAvgMs)} ms`], // per frame, on the page's thread
+    [
+      "Sound",
+      stats === undefined ? "—" : stats.audio === "on" ? "on the TV" : stats.audio === "off" ? "none" : "unavailable",
+    ],
+  ];
+}
+
+/** SVG paths for a sparkline of `values` in a `width`×`height` box: the line, and the area under it. */
+export function sparkline(values: readonly number[], width: number, height: number): { line: string; area: string } {
+  const top = Math.max(...values, 0.001) * 1.1;
+  const step = values.length > 1 ? width / (values.length - 1) : width;
+  const point = (value: number, i: number) =>
+    `${String(Math.round(i * step * 10) / 10)} ${String(Math.round((height - (value / top) * (height - 2)) * 10) / 10)}`;
+  const line = values.map((value, i) => `${i === 0 ? "M" : "L"}${point(value, i)}`).join(" ");
+  return { line, area: `${line} L${String(width)} ${String(height)} L0 ${String(height)} Z` };
+}

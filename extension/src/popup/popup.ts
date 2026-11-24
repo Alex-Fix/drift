@@ -1,12 +1,35 @@
-// The toolbar popup: pick a receiver (pairing it if needed), send a video from this tab to it, watch and stop it.
-// Decisions live in model.ts; this file only wires the DOM and Chrome. Page-derived text is set with textContent.
+// The toolbar popup: pick a TV (pairing it if needed) and a video on this tab, send it, then watch and drive it.
+// Decisions live in model.ts; this file only wires the DOM and Chrome. Page-derived text is set with textContent, and
+// page-derived URLs only ever become an <img src> (http(s) posters).
 import { findCandidates, type Candidate } from "../content/candidates";
 import type { CastInfo, PopupCall } from "../messages";
 import type { DeviceInfo, HostEvent, Request, Response } from "../protocol";
-import { blocked, cantSend, castSummary, explain, pickReceiver, receiverLabel, sendHint } from "./model";
+import {
+  THEMES,
+  cantSend,
+  castSummary,
+  clock,
+  deviceDetail,
+  explain,
+  modeBadge,
+  parseTheme,
+  pickReceiver,
+  pickVideo,
+  progress,
+  seekTarget,
+  sendHint,
+  sparkline,
+  statRows,
+  statsBadge,
+  toggleAction,
+  type ThemeChoice,
+} from "./model";
 
 const RECEIVER_KEY = "receiver";
+const THEME_KEY = "theme";
+const STATS_KEY = "statsOpen";
 const SLOW_START_MS = 3000;
+const SPARK = { width: 320, height: 52 };
 
 /** A video in a frame of the active tab: where it is, to send it. */
 interface Located {
@@ -16,32 +39,57 @@ interface Located {
   candidate: Candidate;
 }
 
-const $ = <T extends HTMLElement>(id: string, type: new () => T): T => {
+const $ = <T extends Element>(id: string, type: new () => T): T => {
   const found = document.getElementById(id);
   if (!(found instanceof type)) throw new Error(`#${id} missing`);
   return found;
 };
 const ui = {
-  devices: $("devices", HTMLSelectElement),
+  theme: $("theme", HTMLButtonElement),
+  themes: $("themes", HTMLDivElement),
   rescan: $("rescan", HTMLButtonElement),
+  now: $("now", HTMLElement),
+  nowState: $("now-state", HTMLSpanElement),
+  nowTitle: $("now-title", HTMLParagraphElement),
+  nowDetail: $("now-detail", HTMLParagraphElement),
+  nowProgress: $("now-progress", HTMLDivElement),
+  nowPlayed: $("now-played", HTMLDivElement),
+  nowBuffered: $("now-buffered", HTMLDivElement),
+  nowPosition: $("now-position", HTMLSpanElement),
+  nowDuration: $("now-duration", HTMLSpanElement),
+  nowControls: $("now-controls", HTMLDivElement),
+  back10: $("back10", HTMLButtonElement),
+  toggle: $("toggle", HTMLButtonElement),
+  iconPause: $("icon-pause", SVGSVGElement),
+  iconPlay: $("icon-play", SVGSVGElement),
+  forward10: $("forward10", HTMLButtonElement),
+  bringBack: $("bring-back", HTMLButtonElement),
+  stop: $("stop", HTMLButtonElement),
+  stats: $("stats", HTMLDetailsElement),
+  statsBadge: $("stats-badge", HTMLSpanElement),
+  spark: $("spark", SVGSVGElement),
+  sparkLine: $("spark-line", SVGPathElement),
+  sparkArea: $("spark-area", SVGPathElement),
+  statsRows: $("stats-rows", HTMLElement),
+  devices: $("devices", HTMLDivElement),
   pairing: $("pairing", HTMLDivElement),
   pairingText: $("pairing-text", HTMLParagraphElement),
   pairBegin: $("pair-begin", HTMLButtonElement),
   pinForm: $("pin-form", HTMLFormElement),
   pin: $("pin", HTMLInputElement),
   pinCancel: $("pin-cancel", HTMLButtonElement),
-  mirroring: $("mirroring", HTMLElement),
-  mirrorTitle: $("mirror-title", HTMLParagraphElement),
-  mirrorDetail: $("mirror-detail", HTMLParagraphElement),
-  stop: $("stop", HTMLButtonElement),
-  bringBack: $("bring-back", HTMLButtonElement),
-  videos: $("videos", HTMLUListElement),
+  videos: $("videos", HTMLDivElement),
+  send: $("send", HTMLButtonElement),
+  sendLabel: $("send-label", HTMLSpanElement),
   status: $("status", HTMLElement),
 };
 
 let devices: DeviceInfo[] = [];
+let deviceNote = "Searching…"; // what the receiver list says while it's empty
+let device: string | undefined;
 let videos: Located[] = [];
-let sendingHere = false;
+let video: number | undefined;
+let info: CastInfo | undefined;
 let busy = false;
 
 // ---- background --------------------------------------------------------------------------------------------------
@@ -73,80 +121,174 @@ function sayError(e: unknown): void {
   say(explain(e instanceof Error ? e.message : String(e)));
 }
 
-// ---- receivers ---------------------------------------------------------------------------------------------------
-
-const selected = (): DeviceInfo | undefined => devices.find((d) => d.id === ui.devices.value);
-
-async function scan(): Promise<void> {
-  ui.devices.disabled = true;
-  ui.devices.replaceChildren(new Option("Searching…"));
+async function stored(key: string): Promise<unknown> {
   try {
-    const response = await call({ type: "scan" });
-    devices = response.type === "devices" ? response.devices : [];
-    const remembered = await recall();
-    if (devices.length === 0) {
-      ui.devices.replaceChildren(new Option("No receivers found"));
-    } else {
-      ui.devices.replaceChildren(
-        ...devices.map((d) => {
-          const option = new Option(receiverLabel(d), d.id);
-          return option;
-        }),
-      );
-      ui.devices.value = pickReceiver(devices, remembered) ?? "";
-      ui.devices.disabled = false;
-    }
-    say("");
-  } catch (e) {
-    devices = [];
-    ui.devices.replaceChildren(new Option("drift-host unavailable"));
-    sayError(e);
-  }
-  renderReceiver();
-  renderVideos();
-}
-
-function renderReceiver(): void {
-  const device = selected();
-  const unpaired = blocked(device) === "unpaired";
-  ui.pairing.hidden = !unpaired;
-  if (unpaired && device !== undefined) {
-    ui.pairingText.textContent = `drift needs to pair with ${device.name} once.`;
-  }
-  ui.pinForm.hidden = true;
-  ui.pairBegin.hidden = false;
-}
-
-async function recall(): Promise<string | undefined> {
-  try {
-    const stored = await chrome.storage.local.get(RECEIVER_KEY);
-    const value = stored[RECEIVER_KEY];
-    return typeof value === "string" ? value : undefined;
+    return (await chrome.storage.local.get(key))[key];
   } catch {
     return undefined;
   }
 }
 
-ui.devices.addEventListener("change", () => {
-  void chrome.storage.local.set({ [RECEIVER_KEY]: ui.devices.value }).catch(() => undefined);
-  renderReceiver();
-  renderVideos();
+function store(key: string, value: unknown): void {
+  void chrome.storage.local.set({ [key]: value }).catch(() => undefined);
+}
+
+// ---- small DOM helpers -------------------------------------------------------------------------------------------
+
+const SVG = "http://www.w3.org/2000/svg";
+const ICONS = {
+  tv: ["M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z", "M8 21h8"],
+  laptop: ["M5 5h14a1.5 1.5 0 0 1 1.5 1.5V16h-17V6.5A1.5 1.5 0 0 1 5 5z", "M1 19h22"],
+  check: ["M5 12l5 5 9-10"],
+} as const;
+
+function icon(name: keyof typeof ICONS, size: number): SVGSVGElement {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  svg.setAttribute("aria-hidden", "true");
+  for (const d of ICONS[name]) {
+    const path = document.createElementNS(SVG, "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  }
+  return svg;
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
+  const element = document.createElement(tag);
+  element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+/** A selectable card in a radio group. */
+function card(checked: boolean, onSelect: () => void): HTMLButtonElement {
+  const button = el("button", "card");
+  button.type = "button";
+  button.setAttribute("role", "radio");
+  button.setAttribute("aria-checked", String(checked));
+  button.addEventListener("click", onSelect);
+  return button;
+}
+
+function empty(text: string): HTMLDivElement {
+  return el("div", "card empty", text);
+}
+
+// ---- themes ------------------------------------------------------------------------------------------------------
+
+const SWATCHES: Record<ThemeChoice, string> = {
+  auto: "linear-gradient(135deg, #151927 50%, #ffffff 50%)",
+  midnight: "#7aa2ff",
+  daylight: "#2f6bff",
+  neon: "#ff4fd8",
+};
+
+function applyTheme(choice: ThemeChoice): void {
+  if (choice === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = choice;
+  ui.themes.replaceChildren(
+    ...THEMES.map((theme) => {
+      const button = el("button", "");
+      button.type = "button";
+      button.setAttribute("role", "radio");
+      button.setAttribute("aria-checked", String(theme.id === choice));
+      const swatch = el("span", "swatch");
+      swatch.style.background = SWATCHES[theme.id];
+      button.append(swatch, theme.name);
+      button.addEventListener("click", () => {
+        store(THEME_KEY, theme.id);
+        applyTheme(theme.id);
+      });
+      return button;
+    }),
+  );
+}
+
+ui.theme.addEventListener("click", () => {
+  ui.themes.hidden = !ui.themes.hidden;
+  ui.theme.setAttribute("aria-expanded", String(!ui.themes.hidden));
 });
+
+// ---- receivers ---------------------------------------------------------------------------------------------------
+
+const selected = (): DeviceInfo | undefined => devices.find((d) => d.id === device);
+
+async function scan(): Promise<void> {
+  devices = [];
+  deviceNote = "Searching…";
+  ui.rescan.disabled = true;
+  renderDevices();
+  try {
+    const response = await call({ type: "scan" });
+    devices = response.type === "devices" ? response.devices : [];
+    const remembered = await stored(RECEIVER_KEY);
+    const known = devices.find((d) => d.id === remembered)?.id;
+    device = known ?? pickReceiver(devices, undefined) ?? devices[0]?.id;
+    deviceNote = "No TVs found. Check that the TV is on and AirPlay is enabled.";
+    say("");
+  } catch (e) {
+    deviceNote = "drift-host unavailable";
+    sayError(e);
+  } finally {
+    ui.rescan.disabled = false;
+  }
+  renderDevices();
+  renderVideos();
+}
+
+function renderDevices(): void {
+  if (devices.length === 0) {
+    ui.devices.replaceChildren(empty(deviceNote));
+  } else {
+    ui.devices.replaceChildren(
+      ...devices.map((d) => {
+        const button = card(d.id === device, () => {
+          device = d.id;
+          store(RECEIVER_KEY, d.id);
+          renderDevices();
+          renderVideos();
+        });
+        if (d.mirror === false) button.classList.add("unusable");
+        const tile = el("div", "tile");
+        tile.append(icon(d.mirror === false ? "laptop" : "tv", 22));
+        const text = el("div", "text");
+        text.append(el("div", "name", d.name), el("div", "sub", deviceDetail(d)));
+        const check = el("div", "check");
+        check.append(icon("check", 12));
+        button.append(tile, text, check);
+        return button;
+      }),
+    );
+  }
+  renderPairing();
+}
+
+function renderPairing(): void {
+  const current = selected();
+  const unpaired = current?.paired === false;
+  ui.pairing.hidden = !unpaired;
+  if (current !== undefined && unpaired) ui.pairingText.textContent = `drift needs to pair with ${current.name} once.`;
+  ui.pinForm.hidden = true;
+  ui.pairBegin.hidden = false;
+}
 
 // ---- pairing -----------------------------------------------------------------------------------------------------
 
 ui.pairBegin.addEventListener("click", () => {
-  const device = selected();
-  if (device === undefined) return;
+  const current = selected();
+  if (current === undefined) return;
   ui.pairBegin.disabled = true; // one pairing at a time: a second pair_begin would cancel the first
-  say(`Asking ${device.name} for a PIN…`);
-  call({ type: "pair_begin", device: device.id })
+  say(`Asking ${current.name} for a PIN…`);
+  call({ type: "pair_begin", device: current.id })
     .then(() => {
       ui.pairBegin.hidden = true;
       ui.pinForm.hidden = false;
       ui.pin.value = "";
       ui.pin.focus();
-      say(`Type the PIN shown on ${device.name}.`);
+      say(`Type the PIN shown on ${current.name}.`);
     }, sayError)
     .finally(() => {
       ui.pairBegin.disabled = false;
@@ -155,27 +297,27 @@ ui.pairBegin.addEventListener("click", () => {
 
 ui.pinForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  const device = selected();
-  if (device === undefined || !ui.pin.checkValidity()) return;
+  const current = selected();
+  if (current === undefined || !ui.pin.checkValidity()) return;
   say("Pairing…");
-  call({ type: "pair_pin", device: device.id, pin: ui.pin.value }).then(
+  call({ type: "pair_pin", device: current.id, pin: ui.pin.value }).then(
     async () => {
-      say(`Paired with ${device.name}.`);
+      say(`Paired with ${current.name}.`);
       await scan();
     },
     (e: unknown) => {
       sayError(e);
-      renderReceiver(); // a failed PIN ends the attempt on the receiver; start over
+      renderPairing(); // a failed PIN ends the attempt on the receiver; start over
     },
   );
 });
 
 ui.pinCancel.addEventListener("click", () => {
-  renderReceiver();
+  renderPairing();
   say("");
 });
 
-// ---- videos and mirroring ----------------------------------------------------------------------------------------
+// ---- videos ------------------------------------------------------------------------------------------------------
 
 async function findVideos(): Promise<void> {
   const tabId = await activeTab();
@@ -188,53 +330,77 @@ async function findVideos(): Promise<void> {
   } catch {
     videos = []; // e.g. chrome:// pages, where extensions can't run
   }
+  video = pickVideo(videos.map((v) => v.candidate));
   renderVideos();
 }
 
 function renderVideos(): void {
   if (videos.length === 0) {
-    ui.videos.replaceChildren(Object.assign(document.createElement("li"), { textContent: "No video on this page." }));
-    return;
+    ui.videos.replaceChildren(empty("No video on this page."));
+  } else {
+    ui.videos.replaceChildren(
+      ...videos.map(({ candidate }, i) => {
+        const button = card(i === video, () => {
+          video = i;
+          renderVideos();
+        });
+        button.classList.add("video");
+        const thumb = el("div", "thumb");
+        if (candidate.poster !== undefined) {
+          const image = el("img", "");
+          image.alt = "";
+          image.referrerPolicy = "no-referrer";
+          image.src = candidate.poster;
+          image.addEventListener("error", () => {
+            image.remove();
+          });
+          thumb.append(image);
+        }
+        if (candidate.duration !== undefined) thumb.append(el("span", "length", clock(candidate.duration)));
+        const text = el("div", "text");
+        const name = el("div", "name", candidate.title);
+        name.title = candidate.title;
+        const tags = el("div", "tags");
+        tags.append(el("span", "badge", candidate.drm ? "DRM-protected" : modeBadge(candidate)));
+        text.append(name, tags);
+        button.append(thumb, text);
+        return button;
+      }),
+    );
   }
-  ui.videos.replaceChildren(
-    ...videos.map((located) => {
-      const { candidate } = located;
-      const item = document.createElement("li");
-      const label = Object.assign(document.createElement("span"), { textContent: candidate.title });
-      label.title = candidate.title;
-      const button = Object.assign(document.createElement("button"), {
-        type: "button",
-        textContent: sendingHere ? "Send this instead" : "Send to TV",
-        title: sendHint(candidate),
-      });
-      const reason = cantSend(selected(), candidate);
-      if (reason !== undefined || busy) {
-        button.disabled = true;
-        if (reason === "drm") button.title = explain("drm");
-        else if (reason === "unpaired") button.title = explain("pairing_required");
-        else if (reason !== undefined) button.title = "Pick a receiver that can play it";
-      }
-      button.addEventListener("click", () => {
-        void send(located);
-      });
-      item.append(label, button);
-      return item;
-    }),
-  );
+  renderSend();
 }
 
+function renderSend(): void {
+  const chosen = video === undefined ? undefined : videos[video];
+  const running = info !== undefined && info.stopped === undefined;
+  ui.sendLabel.textContent = running ? "Send this instead" : "Send to TV";
+  const reason = chosen === undefined ? "no_video" : cantSend(selected(), chosen.candidate);
+  ui.send.disabled = busy || reason !== undefined;
+  if (chosen === undefined) ui.send.title = "";
+  else if (reason === "drm") ui.send.title = explain("drm");
+  else if (reason === "unpaired") ui.send.title = explain("pairing_required");
+  else if (reason !== undefined) ui.send.title = "Pick a TV that can play it";
+  else ui.send.title = sendHint(chosen.candidate);
+}
+
+ui.send.addEventListener("click", () => {
+  const chosen = video === undefined ? undefined : videos[video];
+  if (chosen !== undefined) void send(chosen);
+});
+
 async function send(located: Located): Promise<void> {
-  const device = selected();
-  if (device === undefined) return;
+  const current = selected();
+  if (current === undefined) return;
   busy = true;
-  renderVideos();
-  say(`Connecting to ${device.name}…`);
+  renderSend();
+  say(`Connecting to ${current.name}…`);
   const slow = setTimeout(() => {
-    say(`Waiting for ${device.name}… a TV can take up to 20 seconds after the last session.`);
+    say(`Waiting for ${current.name}… a TV can take up to 20 seconds after the last session.`);
   }, SLOW_START_MS);
   try {
     const { tabId, frameId, index } = located;
-    await background({ kind: "send", tabId, frameId, index, device: device.id });
+    await background({ kind: "send", tabId, frameId, index, device: current.id });
     say("");
   } catch (e) {
     sayError(e);
@@ -245,12 +411,90 @@ async function send(located: Located): Promise<void> {
   }
 }
 
-function onTab(call: (tabId: number) => PopupCall): () => void {
+// ---- now playing and stats ---------------------------------------------------------------------------------------
+
+async function refresh(): Promise<void> {
+  const tabId = await activeTab();
+  if (tabId === undefined) return;
+  ({ info } = await background<{ info?: CastInfo }>({ kind: "info", tabId }));
+  renderNow();
+  renderStats();
+  renderSend();
+}
+
+function renderNow(): void {
+  ui.now.hidden = info === undefined;
+  if (info === undefined) return;
+  const receiver = devices.find((d) => d.id === info?.device)?.name ?? "the TV";
+  const { title, detail } = castSummary(info, receiver);
+  const running = info.stopped === undefined;
+  const stream = info.kind === "stream" ? info : undefined;
+  const waiting = running && (stream?.state === "loading" || stream?.fallingBack === true);
+  ui.now.dataset.tone = !running ? "off" : waiting ? "wait" : "on";
+  ui.nowState.textContent = title;
+  ui.nowTitle.textContent = info.title;
+  ui.nowTitle.hidden = !running;
+  // Streams show time in the progress bar; their detail line is for live streams and stops.
+  const shown = stream === undefined || !running ? detail : stream.duration === undefined ? detail : "";
+  ui.nowDetail.textContent = shown;
+  ui.nowDetail.hidden = shown === "";
+
+  const live = running && stream !== undefined && stream.fallingBack !== true ? stream : undefined;
+  const bar = live === undefined ? undefined : progress(live);
+  ui.nowProgress.hidden = bar === undefined;
+  if (bar !== undefined && live !== undefined) {
+    ui.nowPlayed.style.width = `${String(bar.played * 100)}%`;
+    ui.nowBuffered.style.left = `${String(bar.played * 100)}%`;
+    ui.nowBuffered.style.width = `${String(bar.buffered * 100)}%`;
+    ui.nowPosition.textContent = clock(live.position ?? 0);
+    ui.nowDuration.textContent = clock(live.duration ?? 0);
+  }
+  ui.nowControls.hidden = live === undefined;
+  if (live !== undefined) {
+    const pausing = toggleAction(live) === "pause";
+    ui.toggle.setAttribute("aria-label", pausing ? "Pause" : "Play");
+    ui.iconPause.toggleAttribute("hidden", !pausing);
+    ui.iconPlay.toggleAttribute("hidden", pausing);
+    ui.back10.disabled = ui.forward10.disabled = live.position === undefined;
+  }
+  ui.bringBack.hidden = live === undefined;
+  ui.stop.hidden = !running || stream?.fallingBack === true;
+  ui.stop.textContent = info.kind === "mirror" ? "Stop mirroring" : "Stop";
+  ui.stop.className = info.kind === "mirror" ? "danger" : "quiet"; // the only action while mirroring
+}
+
+function renderStats(): void {
+  const running = info !== undefined && info.stopped === undefined;
+  ui.stats.hidden = !running || (info?.kind === "stream" && info.fallingBack === true);
+  if (info === undefined || ui.stats.hidden) return;
+  ui.statsBadge.textContent = statsBadge(info);
+  const samples = info.kind === "mirror" ? info.bitrate : undefined;
+  ui.spark.toggleAttribute("hidden", samples === undefined || samples.length < 2);
+  if (samples !== undefined && samples.length >= 2) {
+    const { line, area } = sparkline(samples, SPARK.width, SPARK.height);
+    ui.sparkLine.setAttribute("d", line);
+    ui.sparkArea.setAttribute("d", area);
+  }
+  ui.statsRows.replaceChildren(
+    ...statRows(info).map(([label, value]) => {
+      const row = el("div", label === "Quality" ? "wide" : "");
+      row.append(el("dt", "", label), el("dd", "", value));
+      return row;
+    }),
+  );
+}
+
+ui.stats.addEventListener("toggle", () => {
+  store(STATS_KEY, ui.stats.open);
+});
+
+function onTab(make: (tabId: number) => PopupCall | undefined): () => void {
   return () => {
     void activeTab().then(async (tabId) => {
-      if (tabId === undefined) return;
+      const message = tabId === undefined ? undefined : make(tabId);
+      if (message === undefined) return;
       try {
-        await background(call(tabId));
+        await background(message);
       } catch (e) {
         sayError(e);
       }
@@ -259,44 +503,47 @@ function onTab(call: (tabId: number) => PopupCall): () => void {
   };
 }
 
-ui.stop.addEventListener(
+const seek = (delta: number) =>
+  onTab((tabId) => {
+    const position = info?.kind === "stream" ? seekTarget(info, delta) : undefined;
+    return position === undefined ? undefined : { kind: "stream_control", tabId, action: "seek", position };
+  });
+
+ui.back10.addEventListener("click", seek(-10));
+ui.forward10.addEventListener("click", seek(10));
+ui.toggle.addEventListener(
   "click",
-  onTab((tabId) => ({ kind: "stop", tabId })),
+  onTab((tabId) =>
+    info?.kind === "stream" ? { kind: "stream_control", tabId, action: toggleAction(info) } : undefined,
+  ),
 );
 ui.bringBack.addEventListener(
   "click",
   onTab((tabId) => ({ kind: "bring_back", tabId })),
 );
-
-async function refresh(): Promise<void> {
-  const tabId = await activeTab();
-  if (tabId === undefined) return;
-  const { info } = await background<{ info?: CastInfo }>({ kind: "info", tabId });
-  const running = info !== undefined && info.stopped === undefined;
-  if (running !== sendingHere) {
-    sendingHere = running;
-    renderVideos();
-  }
-  ui.mirroring.hidden = info === undefined;
-  ui.stop.hidden = !running;
-  ui.bringBack.hidden = !(running && info.kind === "stream" && info.fallingBack !== true);
-  if (info === undefined) return;
-  const receiver = devices.find((d) => d.id === info.device)?.name ?? "the receiver";
-  const { title, detail } = castSummary(info, receiver);
-  ui.mirrorTitle.textContent = title;
-  ui.mirrorDetail.textContent = detail;
-}
+ui.stop.addEventListener(
+  "click",
+  onTab((tabId) => ({ kind: "stop", tabId })),
+);
 
 // ---- start -------------------------------------------------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((message: { kind?: string; event?: HostEvent }) => {
-  if (message.kind === "event" && message.event !== undefined) void refresh();
+  if (message.kind === "event" && message.event !== undefined) void refresh().catch(() => undefined);
 });
 ui.rescan.addEventListener("click", () => {
   void scan();
 });
 setInterval(() => void refresh().catch(() => undefined), 1000);
 
+applyTheme("auto");
+void stored(THEME_KEY).then((value) => {
+  applyTheme(parseTheme(value));
+});
+void stored(STATS_KEY).then((value) => {
+  ui.stats.open = value === true;
+});
+renderDevices();
 void scan();
 void findVideos();
 void refresh().catch(() => undefined);

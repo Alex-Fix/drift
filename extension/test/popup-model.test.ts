@@ -10,6 +10,16 @@ import {
   pickReceiver,
   receiverLabel,
   sendHint,
+  deviceDetail,
+  modeBadge,
+  parseTheme,
+  pickVideo,
+  progress,
+  seekTarget,
+  sparkline,
+  statRows,
+  statsBadge,
+  toggleAction,
 } from "../src/popup/model";
 import type { DeviceInfo } from "../src/protocol";
 
@@ -55,6 +65,7 @@ describe("explain", () => {
 describe("mirrorSummary", () => {
   const info: MirrorInfo = {
     kind: "mirror",
+    title: "Movie",
     session: "s",
     device: "TV",
     mode: "page",
@@ -98,6 +109,7 @@ describe("mirrorSummary in tab-capture mode", () => {
   it("says it's capturing the tab", () => {
     const info: MirrorInfo = {
       kind: "mirror",
+      title: "Movie",
       session: "s",
       device: "TV",
       mode: "tab",
@@ -114,6 +126,7 @@ describe("mirrorSummary after a step-down", () => {
   it("shows the current quality and that it was lowered", () => {
     const info: MirrorInfo = {
       kind: "mirror",
+      title: "Movie",
       session: "s",
       device: "TV",
       mode: "page",
@@ -162,7 +175,14 @@ describe("sending", () => {
 });
 
 describe("stream summaries", () => {
-  const info: StreamInfo = { kind: "stream", session: "s", device: "TV", mediaType: "file", state: "playing" };
+  const info: StreamInfo = {
+    kind: "stream",
+    title: "Movie",
+    session: "s",
+    device: "TV",
+    mediaType: "file",
+    state: "playing",
+  };
 
   it("shows where it is on the TV", () => {
     const summary = castSummary({ ...info, position: 75.4, duration: 3723, buffered: 24.6 }, "Living Room");
@@ -192,6 +212,7 @@ describe("stream summaries", () => {
   it("says a mirror is a fallback from streaming", () => {
     const mirror: MirrorInfo = {
       kind: "mirror",
+      title: "Movie",
       fellBack: true,
       session: "s",
       device: "TV",
@@ -211,5 +232,110 @@ describe("stream summaries", () => {
     expect(clock(59.9)).toBe("0:59");
     expect(clock(3600)).toBe("1:00:00");
     expect(clock(-3)).toBe("0:00");
+  });
+});
+
+describe("the redesigned popup", () => {
+  const playing: StreamInfo = {
+    kind: "stream",
+    title: "Movie",
+    session: "s",
+    device: "TV",
+    mediaType: "streaming",
+    state: "playing",
+    position: 341,
+    duration: 754,
+    buffered: 42,
+  };
+
+  const omit = (key: "duration" | "position"): StreamInfo =>
+    Object.fromEntries(Object.entries(playing).filter(([name]) => name !== key)) as unknown as StreamInfo;
+
+  it("keeps only known themes, defaulting to the system's", () => {
+    expect(parseTheme("neon")).toBe("neon");
+    expect(parseTheme("daylight")).toBe("daylight");
+    expect(parseTheme("hacker")).toBe("auto");
+    expect(parseTheme(undefined)).toBe("auto");
+  });
+
+  it("describes receivers and how a video will be sent", () => {
+    expect(deviceDetail(tv)).toBe("UCU7000 · paired");
+    expect(deviceDetail(mac)).toBe("AirPlay · not paired · can't mirror");
+    expect(modeBadge({ url: "https://a.example/v.m3u8", mime: undefined })).toBe("Full quality · TV streams it");
+    expect(modeBadge({ url: undefined, mime: undefined })).toBe("Mirrored from this tab");
+  });
+
+  it("preselects the playing video, never a DRM one if another will do", () => {
+    const v = (playing: boolean, drm = false) => ({ playing, drm });
+    expect(pickVideo([v(false), v(true)])).toBe(1);
+    expect(pickVideo([v(true, true), v(false)])).toBe(1);
+    expect(pickVideo([v(false, true)])).toBe(0);
+    expect(pickVideo([])).toBeUndefined();
+  });
+
+  it("draws progress with what's buffered ahead, and nothing for live streams", () => {
+    const shown = progress(playing);
+    expect(shown?.played).toBeCloseTo(341 / 754);
+    expect(shown?.buffered).toBeCloseTo(42 / 754);
+    expect(progress({ ...playing, position: 750, buffered: 30 })?.buffered).toBeCloseTo(4 / 754);
+    expect(progress(omit("duration"))).toBeUndefined();
+  });
+
+  it("seeks ten seconds either way inside the video", () => {
+    expect(seekTarget(playing, 10)).toBe(351);
+    expect(seekTarget({ ...playing, position: 4 }, -10)).toBe(0);
+    expect(seekTarget({ ...playing, position: 750 }, 10)).toBe(754);
+    expect(seekTarget(omit("duration"), 10)).toBe(351);
+    expect(seekTarget(omit("position"), 10)).toBeUndefined();
+  });
+
+  it("toggles between pause and resume", () => {
+    expect(toggleAction(playing)).toBe("pause");
+    expect(toggleAction({ ...playing, state: "paused" })).toBe("resume");
+    expect(toggleAction({ ...playing, state: "ended" })).toBe("resume");
+  });
+
+  it("lists stream stats", () => {
+    expect(statsBadge(playing)).toBe("TV streams it");
+    expect(statRows(playing)).toEqual([
+      ["State", "playing"],
+      ["Format", "HLS"],
+      ["Position", "5:41"],
+      ["Length", "12:34"],
+      ["Buffered", "+42 s"],
+    ]);
+  });
+
+  it("lists mirroring stats with the latest bitrate", () => {
+    const mirror: MirrorInfo = {
+      kind: "mirror",
+      title: "Movie",
+      session: "s",
+      device: "TV",
+      mode: "tab",
+      codec: "h264",
+      width: 1920,
+      height: 1080,
+      fps: 60,
+      bitrate: [5, 12.34, 0],
+      hostDropped: 3,
+    };
+    expect(statsBadge(mirror)).toBe("Mirroring · tab capture");
+    expect(statRows(mirror)).toEqual([
+      ["Quality", "H.264 1920×1080 @ 60 fps"],
+      ["Bitrate", "12.3 Mbit/s"],
+      ["Dropped", "3"],
+      ["Skipped", "0"],
+      ["Page cost", "—"],
+      ["Sound", "—"],
+    ]);
+  });
+
+  it("draws a sparkline scaled to its peak", () => {
+    expect(sparkline([0, 10, 5], 100, 50)).toEqual({
+      line: "M0 50 L50 6.4 L100 28.2",
+      area: "M0 50 L50 6.4 L100 28.2 L100 50 L0 50 Z",
+    });
+    expect(sparkline([0, 0], 10, 10).line).toBe("M0 10 L10 10");
   });
 });

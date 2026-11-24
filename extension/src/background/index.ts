@@ -16,6 +16,7 @@ import {
 import type { Placement } from "../capture/crop";
 import type { HostEvent, StreamAction, StreamStatusEvent } from "../protocol";
 import { chooseMode, fallsBack, fallsBackOnError } from "./cast";
+import { Meter, base64Bytes } from "./meter";
 import { MirrorSessions } from "./mirror";
 import { HOST_NAME, NativeClient } from "./native";
 
@@ -30,6 +31,7 @@ let offscreenTab: number | undefined; // the tab the offscreen document is captu
 let offscreenPort: chrome.runtime.Port | undefined;
 const AUDIO = { format: "pcm_s16", rate: 44100, channels: 2 } as const;
 const hostDropped = new Map<string, number>(); // session → frames the host had dropped at its last status
+const meters = new Map<number, Meter>(); // tab → video bytes sent per second (Stats for nerds)
 
 /** A stream the receiver plays itself, and the page video it came from (paused meanwhile). */
 interface Streamed {
@@ -60,6 +62,8 @@ function onHostEvent(event: HostEvent): void {
   }
   // The host drops frames when the receiver or network can't keep up: ask the capture to lower the quality.
   const dropped = event.dropped ?? 0;
+  const info = infos.get(tabId);
+  if (info?.kind === "mirror") info.hostDropped = dropped;
   if (dropped > (hostDropped.get(event.session) ?? 0)) {
     hostDropped.set(event.session, dropped);
     (offscreenTab === tabId ? offscreenPort : mediaPorts.get(tabId))?.postMessage({ kind: "step_down" });
@@ -103,8 +107,12 @@ async function answer(call: PopupCall): Promise<object> {
     case "bring_back":
       await bringBack(call.tabId);
       return {};
-    case "info":
-      return { info: infos.get(call.tabId) };
+    case "info": {
+      const info = infos.get(call.tabId);
+      const meter = meters.get(call.tabId);
+      if (info?.kind === "mirror" && meter !== undefined) info.bitrate = meter.mbps(Date.now());
+      return { info };
+    }
   }
 }
 
@@ -115,19 +123,20 @@ async function send(tabId: number, frameId: number, index: number, device: strin
   if (video.drm) throw new Error("drm");
   await stopCast(tabId, "replaced");
   const mode = chooseMode(video);
-  if (mode.mode === "mirror") return startMirror(tabId, frameId, index, device);
+  const title = video.title;
+  if (mode.mode === "mirror") return startMirror(tabId, frameId, index, device, { title });
   const response = await client.request(
     { type: "stream_start", device, url: mode.url, media_type: mode.mediaType, position: video.position },
     START_TIMEOUT_MS,
   );
   if (response.type === "error") {
     if (!fallsBackOnError(response.code)) throw new Error(response.code);
-    return startMirror(tabId, frameId, index, device, { fellBack: true });
+    return startMirror(tabId, frameId, index, device, { title, fellBack: true });
   }
   if (response.type !== "stream_started") throw new Error("unexpected answer from drift-host");
   const { session } = response;
   streams.set(tabId, { session, device, frameId, index, played: false });
-  const info: StreamInfo = { kind: "stream", session, device, mediaType: mode.mediaType, state: "loading" };
+  const info: StreamInfo = { kind: "stream", title, session, device, mediaType: mode.mediaType, state: "loading" };
   infos.set(tabId, info);
   await inFrame(tabId, frameId, pauseVideo, [index]).catch(() => undefined); // sound and picture on the TV only
   return info;
@@ -165,7 +174,7 @@ async function fallBackToMirror(tabId: number, stream: Streamed, info: StreamInf
   try {
     // Mirroring captures what the page plays: start it again where it was paused.
     if (!(await inFrame(tabId, stream.frameId, resumeVideo, [stream.index, null]))) throw new Error("no_video");
-    await startMirror(tabId, stream.frameId, stream.index, stream.device, { fellBack: true });
+    await startMirror(tabId, stream.frameId, stream.index, stream.device, { title: info.title, fellBack: true });
   } catch (e) {
     info.fallingBack = false;
     info.stopped = e instanceof Error ? e.message : "mirror_failed";
@@ -255,7 +264,13 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     const notification = sessions.accept(tabId, raw);
-    if (notification !== undefined) client.notify(notification);
+    if (notification === undefined) return;
+    if (notification.type === "video") {
+      let meter = meters.get(tabId);
+      if (meter === undefined) meters.set(tabId, (meter = new Meter()));
+      meter.add(base64Bytes(notification.data), Date.now());
+    }
+    client.notify(notification);
   });
   port.onDisconnect.addListener(() => {
     if (fromOffscreen) {
@@ -272,7 +287,7 @@ async function startMirror(
   frameId: number,
   index: number,
   device: string,
-  extra: Pick<MirrorInfo, "fellBack"> = {},
+  extra: Pick<MirrorInfo, "fellBack" | "title">,
 ): Promise<MirrorInfo> {
   if (sessions.session(tabId) !== undefined) await stopMirror(tabId, "replaced");
   await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["capture.js"] });
@@ -299,7 +314,7 @@ async function startTabCapture(
   frameId: number,
   device: string,
   placement: Placement | null,
-  extra: Pick<MirrorInfo, "fellBack">,
+  extra: Pick<MirrorInfo, "fellBack" | "title">,
 ): Promise<MirrorInfo> {
   if (offscreenTab !== undefined) await stopMirror(offscreenTab, "replaced");
   const session = await mirrorStart(device, true); // tab capture always has a sound track
@@ -356,6 +371,7 @@ function toOffscreen<T = unknown>(command: OffscreenCommand): Promise<T> {
 
 async function stopMirror(tabId: number, why: string): Promise<void> {
   const session = sessions.unbind(tabId);
+  meters.delete(tabId);
   if (session === undefined) return;
   const info = infos.get(tabId);
   if (info?.kind === "mirror") info.stopped = why;

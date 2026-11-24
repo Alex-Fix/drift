@@ -179,6 +179,19 @@ Still open:
    at the receiver's last position. Interim popup: a "Send to TV" button with a hint saying how it will be sent, a
    stream summary (state, time, buffer), and Bring back/Stop; receivers that can't mirror are selectable, since they
    may still stream. The full popup comes in step 6. Not run in the browser or on the TV yet.
-6. Popup rebuild: themes, cards, now-playing, Stats for nerds.
+6. ~~Popup rebuild: themes, cards, now-playing, Stats for nerds.~~ Done 2026-11-24.
+   - **Themes:** Midnight Glass, Daylight and Neon Cinema are CSS custom properties. Without a choice the popup
+     follows the system; the picker in the header pins one (`theme` in `chrome.storage.local`).
+   - **Fonts:** the mockups' fonts (Inter, Space Grotesk) are used when installed, else system fonts. Nothing is
+     loaded from Google Fonts (no third-party servers).
+   - **Cards:** receivers are a radio group; ones that can't mirror are dashed but selectable, since they may
+     stream. Videos show the page's poster (http(s), no referrer) with their length and a mode badge.
+   - **Now playing:** Playing/Paused/Loading with a pulsing dot while waiting, progress with the buffer ahead,
+     ±10 s and play/pause, Bring back and Stop.
+   - **Stats for nerds:** a collapsible panel, its open state remembered. Streaming shows state, format, position,
+     length and buffer. Mirroring shows quality, bitrate (a 60 s sparkline from `background/meter.ts`, which counts
+     the video bytes the background forwards), host drops, encoder skips, page cost and sound.
+   - Decisions are in `popup/model.ts`, unit-tested. All three themes were checked in headless Chrome against the
+     mockups, with a stubbed `chrome`.
 7. Page overlay (remote) for streaming and both mirroring modes.
 8. Live checks, README, architecture, security skill.

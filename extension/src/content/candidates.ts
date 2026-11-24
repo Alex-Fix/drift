@@ -7,6 +7,8 @@ export interface Candidate {
   duration: number | undefined;
   position: number;
   playing: boolean;
+  /** The page's poster image for it (http(s) only), shown as the thumbnail in the popup. */
+  poster: string | undefined;
   /** Encrypted Media Extensions are active: DRM-protected, never streamed. */
   drm: boolean;
 }
@@ -28,6 +30,7 @@ export function findCandidates(): Candidate[] {
       title: document.title.slice(0, 256) || location.hostname,
       duration: Number.isFinite(video.duration) ? video.duration : undefined,
       position: video.currentTime,
+      poster: /^https?:\/\//i.test(video.poster) && video.poster.length <= 2048 ? video.poster : undefined,
       playing: !video.paused,
       drm: video.mediaKeys !== null,
     };
