@@ -343,8 +343,7 @@ class Remote {
       const position = picked();
       if (!event.isTrusted || position === undefined) return;
       if (this.mode === "stream") {
-        const message: OverlayActionMessage = { kind: "drift-overlay-action", action: "seek", position };
-        chrome.runtime.sendMessage(message).catch(() => undefined);
+        this.send({ kind: "drift-overlay-action", action: "seek", position });
       } else {
         this.video.currentTime = position; // mirroring: the TV shows what the page's video plays
       }
@@ -353,6 +352,15 @@ class Remote {
     this.panel.addEventListener("keydown", (event) => {
       event.stopPropagation();
     });
+  }
+
+  /** To the background. Once the extension is reloaded or removed this remote is an orphan: it goes away. */
+  private send(message: OverlayActionMessage): void {
+    try {
+      chrome.runtime.sendMessage(message).catch(() => undefined);
+    } catch {
+      this.destroy(); // "Extension context invalidated" is thrown, not returned as a rejected promise
+    }
   }
 
   private button(className: string, label: string, content: Node): HTMLButtonElement {
@@ -371,8 +379,7 @@ class Remote {
         this.local(action);
         return;
       }
-      const message: OverlayActionMessage = { kind: "drift-overlay-action", action };
-      chrome.runtime.sendMessage(message).catch(() => undefined);
+      this.send({ kind: "drift-overlay-action", action });
     });
   }
 
@@ -393,6 +400,10 @@ class Remote {
   private track(): void {
     const place = () => {
       this.scheduled = false;
+      if (!connected()) {
+        this.destroy(); // the extension was reloaded or removed: nothing can drive this remote any more
+        return;
+      }
       const container = document.fullscreenElement;
       const parent =
         container !== null && container !== this.video && container.contains(this.video)
@@ -467,6 +478,16 @@ class Remote {
     set("--radius", tokens.radius);
     set("--title-font", tokens.titleFont);
     this.panel.style.colorScheme = theme === "daylight" ? "light" : "dark";
+  }
+}
+
+/** False once the extension that injected this script is reloaded or removed (its context is invalidated). */
+function connected(): boolean {
+  try {
+    // Typed as always a string, but it's undefined in a script whose extension was reloaded.
+    return (chrome.runtime.id as string | undefined) !== undefined;
+  } catch {
+    return false;
   }
 }
 
