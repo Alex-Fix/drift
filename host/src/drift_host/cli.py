@@ -6,6 +6,7 @@ other invocation is a developer command.
 
 import argparse
 import asyncio
+import io
 import logging
 import sys
 import time
@@ -25,6 +26,11 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if args and args[0].startswith("chrome-extension://"):
         return _serve()
+    # Developer commands print to a console that may not be UTF-8 (Windows' cp1252): show "?" rather than crash on an
+    # arrow or a receiver's name. (Serving uses binary stdio and never reaches here.)
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(errors="replace")
 
     parser = argparse.ArgumentParser(prog="drift-host", description="AirPlay host for the drift browser extension.")
     parser.add_argument("--version", action="version", version=f"drift-host {__version__}")

@@ -35,7 +35,7 @@ def main() -> int:
     assert len(reply.stdout) >= 4, f"no reply (exit {reply.returncode}): {reply.stderr.decode()}"
     (length,) = struct.unpack("=I", reply.stdout[:4])
     message = json.loads(reply.stdout[4 : 4 + length])
-    print(f"hello → {message}")
+    print(f"hello -> {message}")  # ASCII: Windows consoles default to cp1252
     assert message["type"] == "hello" and message["id"] == "smoke", message
     if expected is not None:
         assert message["host"] == expected, message
