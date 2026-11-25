@@ -240,3 +240,65 @@ export function sparkline(values: readonly number[], width: number, height: numb
   const line = values.map((value, i) => `${i === 0 ? "M" : "L"}${point(value, i)}`).join(" ");
   return { line, area: `${line} L${String(width)} ${String(height)} L0 ${String(height)} Z` };
 }
+
+// ---- the companion app (release design 2026-11-25, step 5) ---------------------------------------------------------
+
+/** Where users get drift-host: a fixed address, never built from anything the host or a page sends. */
+export const DOWNLOAD_URL = "https://github.com/Alex-Fix/drift/releases/latest";
+export const HOST_MISSING = "drift-host is not running or not installed"; // NativeClient's error when the port fails
+
+export type HostProblem = { kind: "missing" } | { kind: "outdated"; host: string; needed: number };
+
+/** The leading number of a version ("1.0.0rc1" → 1), or undefined. */
+export function major(version: string): number | undefined {
+  const match = /^(\d+)\./.exec(version);
+  return match?.[1] === undefined ? undefined : Number(match[1]);
+}
+
+/**
+ * Whether drift-host needs installing or updating: the native port failed, or the host's major version is older
+ * than the extension's (`hello` reports it). A newer host is fine; the extension updates itself from the store.
+ */
+export function hostProblem(
+  error: string | undefined,
+  hostVersion: string | undefined,
+  extensionVersion: string,
+): HostProblem | undefined {
+  if (error === HOST_MISSING) return { kind: "missing" };
+  const host = hostVersion === undefined ? undefined : major(hostVersion);
+  const needed = major(extensionVersion);
+  if (hostVersion !== undefined && host !== undefined && needed !== undefined && host < needed) {
+    return { kind: "outdated", host: hostVersion, needed };
+  }
+  return undefined;
+}
+
+export type Platform = "macOS" | "Windows" | "Linux";
+
+/** The OS to offer a download for, from `navigator.userAgentData.platform` or `navigator.platform`. */
+export function platformOf(platform: string): Platform | undefined {
+  const name = platform.toLowerCase();
+  if (name.startsWith("mac")) return "macOS";
+  if (name.startsWith("win")) return "Windows";
+  if (name.includes("linux") || name.includes("x11")) return "Linux";
+  return undefined;
+}
+
+export function hostCard(
+  problem: HostProblem,
+  platform: Platform | undefined,
+): { title: string; text: string; button: string } {
+  const button = platform === undefined ? "Download drift-host" : `Download for ${platform}`;
+  if (problem.kind === "missing") {
+    return {
+      title: "drift needs its companion app",
+      text: "drift-host talks to your TV over your local network. Install it once, then open this popup again.",
+      button,
+    };
+  }
+  return {
+    title: "Update drift-host",
+    text: `This version of drift needs drift-host ${String(problem.needed)} or newer (you have ${problem.host}).`,
+    button,
+  };
+}

@@ -28,7 +28,7 @@ const THEMES = {
     ok: "#48d597",
     warn: "#ffcf6b",
     radius: "14px",
-    titleFont: "inherit",
+    titleFont: "Inter, system-ui, sans-serif", // not `inherit`: invalid inside the `font` shorthand
   },
   daylight: {
     bg: "#ffffff",
@@ -43,7 +43,7 @@ const THEMES = {
     ok: "#1f9d63",
     warn: "#b7791f",
     radius: "14px",
-    titleFont: "inherit",
+    titleFont: "Inter, system-ui, sans-serif", // not `inherit`: invalid inside the `font` shorthand
   },
   neon: {
     bg: "#120f1c",

@@ -5,16 +5,21 @@ import { findCandidates, type Candidate } from "../content/candidates";
 import type { CastInfo, PopupCall } from "../messages";
 import type { DeviceInfo, HostEvent, Request, Response } from "../protocol";
 import {
+  DOWNLOAD_URL,
+  HOST_MISSING,
   THEMES,
   cantSend,
   castSummary,
   clock,
   deviceDetail,
   explain,
+  hostCard,
+  hostProblem,
   modeBadge,
   parseTheme,
   pickReceiver,
   pickVideo,
+  platformOf,
   progress,
   seekTarget,
   sendHint,
@@ -48,6 +53,11 @@ const ui = {
   theme: $("theme", HTMLButtonElement),
   themes: $("themes", HTMLDivElement),
   rescan: $("rescan", HTMLButtonElement),
+  host: $("host", HTMLElement),
+  hostTitle: $("host-title", HTMLParagraphElement),
+  hostText: $("host-text", HTMLParagraphElement),
+  hostDownload: $("host-download", HTMLButtonElement),
+  hostDownloadLabel: $("host-download-label", HTMLSpanElement),
   now: $("now", HTMLElement),
   nowState: $("now-state", HTMLSpanElement),
   nowTitle: $("now-title", HTMLParagraphElement),
@@ -215,6 +225,36 @@ ui.theme.addEventListener("click", () => {
   ui.theme.setAttribute("aria-expanded", String(!ui.themes.hidden));
 });
 
+// ---- the companion app (drift-host) ------------------------------------------------------------------------------
+
+/** Ask drift-host its version; show the install or update card when it's missing or too old. False only when it's
+ * missing (no point scanning). */
+async function checkHost(): Promise<boolean> {
+  let error: string | undefined;
+  let version: string | undefined;
+  try {
+    const response = await call({ type: "hello" });
+    if (response.type === "hello") version = response.host;
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e);
+  }
+  const problem = hostProblem(error, version, chrome.runtime.getManifest().version);
+  ui.host.hidden = problem === undefined;
+  if (problem === undefined) return true; // usable, or another error the scan will report
+  const platform = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform;
+  const card = hostCard(problem, platformOf(platform ?? navigator.platform));
+  ui.hostTitle.textContent = card.title;
+  ui.hostText.textContent = card.text;
+  ui.hostDownloadLabel.textContent = card.button;
+  return problem.kind === "outdated"; // an old host still works for what it supports
+}
+
+ui.hostDownload.addEventListener("click", () => {
+  void chrome.tabs.create({ url: DOWNLOAD_URL }).then(() => {
+    window.close();
+  });
+});
+
 // ---- receivers ---------------------------------------------------------------------------------------------------
 
 const selected = (): DeviceInfo | undefined => devices.find((d) => d.id === device);
@@ -233,8 +273,10 @@ async function scan(): Promise<void> {
     deviceNote = "No TVs found. Check that the TV is on and AirPlay is enabled.";
     say("");
   } catch (e) {
-    deviceNote = "drift-host unavailable";
-    sayError(e);
+    const missing = e instanceof Error && e.message === HOST_MISSING;
+    deviceNote = missing ? "Install drift-host to find your TVs." : "drift-host unavailable";
+    if (missing) void checkHost();
+    else sayError(e);
   } finally {
     ui.rescan.disabled = false;
   }
@@ -586,6 +628,12 @@ void stored(STATS_KEY).then((value) => {
   ui.stats.open = value === true;
 });
 renderDevices();
-void scan();
+void checkHost().then((usable) => {
+  if (usable) void scan();
+  else {
+    deviceNote = "Install drift-host to find your TVs.";
+    renderDevices();
+  }
+});
 void findVideos();
 void refresh().catch(() => undefined);

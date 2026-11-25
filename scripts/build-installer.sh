@@ -33,7 +33,8 @@ case "$(uname -s)" in
     [[ -n "$iscc" ]] || iscc="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
     [[ -x "$iscc" ]] || die "Inno Setup (ISCC.exe) not found"
     mkdir -p "$out"
-    DRIFT_VERSION="$version" DRIFT_VERSION_NUMBER="${version%%-*}" DRIFT_EXTENSION_ID="$extension_id" \
+    # MSYS_NO_PATHCONV: Git Bash would turn the /Q switch into a path (the paths here are converted already).
+    MSYS_NO_PATHCONV=1 DRIFT_VERSION="$version" DRIFT_VERSION_NUMBER="${version%%-*}" DRIFT_EXTENSION_ID="$extension_id" \
       DRIFT_HOST_DIST="$(cygpath -w "$dist")" DRIFT_OUTPUT="$(cygpath -w "$out")" DRIFT_ROOT="$(cygpath -w "$ROOT")" \
       "$iscc" /Q "$(cygpath -w "$HOST_DIR/packaging/windows/drift.iss")"
     ls "$out"/*.exe
