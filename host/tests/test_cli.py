@@ -8,7 +8,7 @@ from drift_host.cli import main
 
 def test_developer_commands_survive_a_console_that_isnt_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
     raw = io.BytesIO()
-    console = io.TextIOWrapper(raw, encoding="cp1252")  # Windows' default console encoding
+    console = io.TextIOWrapper(raw, encoding="cp1252", newline="\n")  # Windows' default console encoding
     monkeypatch.setattr(sys, "stdout", console)
     with pytest.raises(SystemExit):
         main(["--version"])
