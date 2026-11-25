@@ -78,13 +78,17 @@ drift's icon appears in the toolbar (16 px, often on a dark toolbar), on `chrome
   Store image guidelines); it should still read on a light and a dark page.
 - **Toolbar sizes:** the tile may fill the canvas (1 px margin at 16). A dark tile needs a lighter rim or enough edge
   contrast to separate from Chrome's dark toolbar (`#202124`), and a light one from the light toolbar (`#f1f3f4`).
+- **The mark (chosen 2026-11-25, "J · Holo frame" on the canvas "drift icon directions"):** a floating screen on a
+  deep-space tile (`#0b0e1c`) with a violet ghost layer behind it (parallax), a wave as a light trail
+  (transparent → cyan `#5ce1ff` → white) ending in a bright point, a glow line beneath instead of a stand, and a
+  thin gradient rim (`#a9c1ff` → `#2b2f5e` → violet `#c77dff`). Futuristic, but calm: glow only at 48 px and up.
 - **No lookalikes of others' marks:** not Apple's AirPlay glyph (screen with a triangle under it), not Google Cast's
-  corner arcs, not Apple TV, Chromecast or any streaming service's logo. drift's own motif is the **two waves**
-  (the popup's mark) — keep icons in that family.
+  corner arcs, not Apple TV, Chromecast or any streaming service's logo.
 - No text or letters smaller than the mark itself; no gradients that the meaning depends on (they vanish at 16).
-- Files: SVG sources in `extension/src/icons/` (one per optical size), PNGs rendered from them at build time
-  (`icon-16/32/48/128.png`, referenced from `manifest.json` `icons` and `action.default_icon`); installer icons are
-  rendered from the same sources by the release workflow.
+- Files: SVG sources in `extension/src/icons/` (`icon-16.svg`, `icon-32.svg`, `icon-128.svg`, the master for 48 and
+  128). `scripts/render-icons.sh` renders `icon-16/32/48/128.png` with headless Chrome; the PNGs are committed (the
+  build stays dependency-free) and referenced from `manifest.json` (`icons`, `action.default_icon`). Use
+  `stop-opacity`, not 8-digit hex colours, so every SVG renderer agrees. Installer icons come from the same sources.
 
 ## Exploring and verifying visuals
 

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <title>drift</title>
+  <defs><linearGradient id="t" gradientUnits="userSpaceOnUse" x1="6" y1="0" x2="24" y2="0"><stop offset="0.00" stop-color="#5ce1ff" stop-opacity="0.20"></stop><stop offset="0.50" stop-color="#5ce1ff"></stop><stop offset="1.00" stop-color="#ffffff"></stop></linearGradient>
+  </defs><rect x="1" y="1" width="30" height="30" rx="8" fill="#0b0e1c" stroke="#4b5594" stroke-width="1"></rect>
+  <rect x="10.5" y="10.5" width="14" height="10" rx="2" fill="none" stroke="#c77dff" stroke-width="1.25" opacity="0.6"></rect>
+  <rect x="7.5" y="7.5" width="14" height="10" rx="2" fill="#0b0e1c" stroke="#e8ebf5" stroke-width="2"></rect>
+  <path d="M6 15.5c2.67-3 5.33 3 8 0s5.33-3 8 0" fill="none" stroke="url(#t)" stroke-width="2.25" stroke-linecap="round"></path>
+  <circle cx="22.5" cy="15.5" r="1.6" fill="#ffffff"></circle>
+  <path d="M11 25h10" fill="none" stroke="#7aa2ff" stroke-width="1.5" stroke-linecap="round" opacity="0.6"></path>
+  
+</svg>
