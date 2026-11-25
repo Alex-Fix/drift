@@ -62,6 +62,14 @@ description: Conventions for drift-host (host/, Python ≥ 3.12, uv) — module 
 
 ## Native messaging per OS
 
+`install.py` plans every manifest (pure, tested per OS) for two scopes: **user** (developers; the per-user Windows
+installer) and **system** (`drift-host install --system`, run as root by the macOS and Linux installers). Paths were
+checked against each browser's source or binary (release design 2026-11-25, step 2); notably **Brave reads Chrome's
+locations** on macOS and Linux, and Vivaldi (closed source) gets Chromium's, best effort. A packaged (PyInstaller)
+build points the manifest at its own executable; from source, at a launcher running `python -m drift_host`.
+`--browser all` (the default) writes one manifest per distinct location; per user, only for browsers with a profile.
+
+
 - Chrome starts the host with the extension origin as the first argument (Windows adds `--parent-window=`), kills it
   when the port closes, and reads the manifest from: macOS `~/Library/Application Support/<browser>/NativeMessagingHosts/`,
   Linux `~/.config/<browser>/NativeMessagingHosts/`, Windows the path in `HKCU\Software\<vendor>\<browser>\NativeMessagingHosts\<name>`.
