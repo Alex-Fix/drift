@@ -1,0 +1,3 @@
+#!/bin/sh
+# Runs as root before the files are removed (also before an upgrade, whose postinstall registers again).
+/opt/drift/drift-host/drift-host uninstall --system --extension-id "@EXTENSION_ID@" || true

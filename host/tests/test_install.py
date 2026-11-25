@@ -121,3 +121,9 @@ def test_a_browser_counts_as_present_when_its_profile_directory_exists(tmp_path:
     assert browser_present(chrome) and not browser_present(edge)
     windows = plan("edge", EXTENSION_ID, system="win32", home=tmp_path, data_dir=DATA, python="python.exe")
     assert browser_present(windows)  # registry keys: nothing to leave behind
+
+
+def test_windows_writes_each_registry_key_once() -> None:
+    all_ = plans(BROWSERS, EXTENSION_ID, system="win32", home=HOME, data_dir=DATA, python="python.exe")
+    keys = [p.registry_key for p in all_]
+    assert len(keys) == len(set(keys)) == 4  # Vivaldi reads Chrome's key

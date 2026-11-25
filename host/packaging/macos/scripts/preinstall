@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs as root before the files are copied: remove the previous drift-host so an upgrade leaves no stale files.
+rm -rf "/Library/Application Support/drift/drift-host"
+exit 0

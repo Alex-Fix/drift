@@ -149,8 +149,9 @@ def plans(
     executable: Path | None = None,
     scope: Scope = "user",
 ) -> list[Plan]:
-    """One plan per distinct manifest: browsers that share a location (Brave reads Chrome's) share a manifest."""
-    seen: set[tuple[Path, str | None]] = set()
+    """One plan per distinct location: browsers that share one (Brave reads Chrome's manifest directory on macOS and
+    Linux; Vivaldi reads Chrome's registry key on Windows) share a plan."""
+    seen: set[Path | str] = set()
     out = []
     for browser in browsers:
         p = plan(
@@ -163,8 +164,9 @@ def plans(
             executable=executable,
             scope=scope,
         )
-        if (p.manifest, p.registry_key) not in seen:
-            seen.add((p.manifest, p.registry_key))
+        location = p.registry_key if p.registry_key is not None else p.manifest
+        if location not in seen:
+            seen.add(location)
             out.append(p)
     return out
 

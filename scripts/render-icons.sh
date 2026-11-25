@@ -38,3 +38,21 @@ render 16 icon-16.svg
 render 32 icon-32.svg
 render 48 icon-128.svg
 render 128 icon-128.svg
+
+# The Windows installer's icon: an .ico holding PNG images (16, 32, 48 and a 256 render of the master).
+render 256 icon-128.svg
+python3 - "$icons" "$HOST_DIR/packaging/windows/drift.ico" <<'PY'
+import struct, sys
+from pathlib import Path
+icons, out = Path(sys.argv[1]), Path(sys.argv[2])
+images = [(size, (icons / f"icon-{size}.png").read_bytes()) for size in (16, 32, 48, 256)]
+header = struct.pack("<HHH", 0, 1, len(images))
+offset = len(header) + 16 * len(images)
+entries, data = b"", b""
+for size, png in images:
+    entries += struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32, len(png), offset + len(data))
+    data += png
+out.write_bytes(header + entries + data)
+PY
+rm "$icons/icon-256.png"  # only the .ico needs it
+info "drift.ico for the Windows installer"

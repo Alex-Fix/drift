@@ -1,0 +1,15 @@
+#!/bin/sh
+# Remove drift-host from this Mac:  sudo "/Library/Application Support/drift/uninstall.sh"
+# Your pairing data stays in ~/Library/Application Support/drift (delete that folder to forget paired TVs).
+set -e
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Run it with sudo: sudo \"/Library/Application Support/drift/uninstall.sh\"" >&2
+  exit 1
+fi
+dir="/Library/Application Support/drift"
+if [ -x "$dir/drift-host/drift-host" ]; then
+  "$dir/drift-host/drift-host" uninstall --system --extension-id "@EXTENSION_ID@" || true
+fi
+rm -rf "$dir"
+pkgutil --forget io.github.alex-fix.drift >/dev/null 2>&1 || true
+echo "drift-host removed."
