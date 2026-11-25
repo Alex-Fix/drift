@@ -107,7 +107,8 @@ jobs:
 
       - name: Install Inno Setup (Windows)
         if: runner.os == 'Windows'
-        run: choco install innosetup --version=6.4.3 --yes --no-progress
+        # Pinned; --allow-downgrade keeps it exact when the runner image ships a newer one.
+        run: choco install innosetup --version=6.7.1 --allow-downgrade --yes --no-progress
 
       - name: Build the installer
         shell: bash
