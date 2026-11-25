@@ -217,18 +217,12 @@ svg.solid {
   gap: 10px;
 }
 
+/* The extension icon, the same in every theme: it's the brand, not a themed control. */
 .mark {
   width: 30px;
   height: 30px;
-  border-radius: 9px;
-  background: var(--accent);
-  color: var(--on-accent);
   display: grid;
   place-items: center;
-}
-
-.mark svg {
-  stroke-width: 2.4;
 }
 
 .wordmark {
