@@ -22,6 +22,9 @@ dependencies = [
 drift-host = "drift_host.cli:main"
 
 [dependency-groups]
+build = [
+    "pyinstaller>=6.22.3",
+]
 dev = [
     "mypy>=1.15",
     "pytest>=8.3",

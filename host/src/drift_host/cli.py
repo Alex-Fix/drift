@@ -55,6 +55,9 @@ def main(argv: list[str] | None = None) -> int:
         "--controls", action="store_true", help="halfway through: pause 3 s, jump 30 s ahead, resume"
     )
     stream_url.add_argument("url", help="http(s) URL of an MP4/MOV file or an HLS playlist (.m3u8)")
+    commands.add_parser(
+        "check", help="check this drift-host can load everything it uses (packaged builds run it in CI)"
+    )
     for name in ("install", "uninstall"):
         command = commands.add_parser(name, help=f"{name} the native-messaging host for Chromium browsers")
         command.add_argument(
@@ -99,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except KeyboardInterrupt:
                 return 130
+        case "check":
+            return _check()
         case "install" | "uninstall":
             browsers = install.BROWSERS if parsed.browser == "all" else (cast("install.Browser", parsed.browser),)
             try:
@@ -143,6 +148,39 @@ def _serve() -> int:
     stdin, stdout = messaging.binary_stdio()
     asyncio.run(app.serve(PyatvReceivers(credentials_path()), stdin, stdout))
     return 0
+
+
+def _check() -> int:
+    """Import every module drift-host and pyatv can load (much of it lazily: scanning, pairing, mirroring) and start an
+    SRP session, so a packaged build missing a module fails here instead of in front of a TV."""
+    import importlib
+    import pkgutil
+
+    import pyatv
+
+    import drift_host
+
+    failed = []
+    count = 0
+    for package, prefix in ((drift_host, "drift_host."), (pyatv, "pyatv.")):
+        for module in pkgutil.walk_packages(package.__path__, prefix):
+            if module.name.startswith("pyatv.scripts"):  # pyatv's own command-line tools: not used
+                continue
+            count += 1
+            try:
+                importlib.import_module(module.name)
+            except Exception as e:  # report every missing module, not just the first
+                failed.append(f"{module.name}: {e}")
+    from pyatv.auth.hap_srp import SRPAuthHandler
+
+    # pyatv's SRP handler has no type hints.
+    handler = SRPAuthHandler()  # type: ignore[no-untyped-call]
+    handler.initialize()  # type: ignore[no-untyped-call]
+    handler.step1(1234)  # type: ignore[no-untyped-call]  # pairing's first step (srptools; see pyproject.toml)
+    for line in failed:
+        print(f"missing {line}", file=sys.stderr)
+    print(f"drift-host {__version__}: {count - len(failed)}/{count} modules load, pairing starts")
+    return 1 if failed else 0
 
 
 def credentials_path() -> Path:
