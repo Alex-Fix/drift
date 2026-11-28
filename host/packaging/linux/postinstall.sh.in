@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs as root after the files are in place: register drift-host with every Chromium browser, for every user.
+set -e
+/opt/drift/drift-host/drift-host install --system --extension-id "@EXTENSION_ID@"

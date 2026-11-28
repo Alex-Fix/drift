@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Register drift-host (this checkout, via uv's venv) with a browser.
-# Usage: scripts/install-host.sh --extension-id <id> [--browser chrome|chromium|edge|brave|vivaldi] [--uninstall]
+# Usage: scripts/install-host.sh --extension-id <id> [--browser chrome|chromium|edge|brave|vivaldi|all] [--uninstall]
+# Default: every Chromium browser with a profile on this machine.
 source "$(dirname "$0")/_common.sh"
 require uv
 

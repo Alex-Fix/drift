@@ -1,0 +1,26 @@
+# nfpm config for the Linux packages (.deb, .rpm) around the packaged drift-host; filled in by build-packages.sh.
+name: drift-host
+arch: amd64
+platform: linux
+version: "@VERSION@"
+version_schema: semver
+section: video
+priority: optional
+maintainer: "Alex Papish"
+description: |
+  Companion program for the drift browser extension.
+  drift sends the video in a Chromium browser to an AirPlay TV; drift-host talks to the TV on the local network.
+vendor: drift
+homepage: https://github.com/Alex-Fix/drift
+license: MIT
+contents:
+  - src: "@DIST@"
+    dst: /opt/drift/drift-host
+    type: tree
+  - src: "@LICENSE@"
+    dst: /usr/share/doc/drift-host/copyright
+    file_info:
+      mode: 0644
+scripts:
+  postinstall: "@WORK@/postinstall.sh"
+  preremove: "@WORK@/preremove.sh"

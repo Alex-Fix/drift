@@ -74,6 +74,93 @@ jobs:
       - name: Test
         run: uv run pytest
 
+  # The packaged drift-host and its installer per OS (release design steps 3-4): build, smoke-test, install on this
+  # fresh machine, verify every browser registration, uninstall, verify nothing is left.
+  host-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux: the oldest Ubuntu GitHub offers, so the bundled Python runs on distributions with an older glibc.
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      UV_PYTHON: "3.13" # what release builds bundle
+      DRIFT_EXTENSION_ID: abcdefghijklmnopabcdefghijklmnop # a test id until the store id is in install.py
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: host/uv.lock
+
+      - name: Build and smoke-test drift-host
+        shell: bash
+        run: scripts/build-host.sh
+
+      - name: Install nfpm (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install Inno Setup (Windows)
+        if: runner.os == 'Windows'
+        # Pinned; --allow-downgrade keeps it exact when the runner image ships a newer one.
+        run: choco install innosetup --version=6.7.1 --allow-downgrade --yes --no-progress
+
+      - name: Build the installer
+        shell: bash
+        run: scripts/build-installer.sh
+
+      - name: Install (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo installer -pkg artifacts/installers/*.pkg -target /
+          echo "DRIFT_INSTALLED=/Library/Application Support/drift/drift-host/drift-host" >> "$GITHUB_ENV"
+
+      - name: Install (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install --yes ./artifacts/installers/*.deb
+          echo "DRIFT_INSTALLED=/opt/drift/drift-host/drift-host" >> "$GITHUB_ENV"
+
+      - name: Install (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem artifacts/installers/*.exe).FullName
+          Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          "DRIFT_INSTALLED=$env:LOCALAPPDATA\Programs\drift\drift-host\drift-host.exe" >> $env:GITHUB_ENV
+
+      - name: Verify the install
+        working-directory: host
+        shell: bash
+        run: uv run python packaging/verify_install.py installed "$DRIFT_INSTALLED" "$DRIFT_EXTENSION_ID"
+
+      - name: Uninstall (macOS)
+        if: runner.os == 'macOS'
+        run: sudo "/Library/Application Support/drift/uninstall.sh"
+
+      - name: Uninstall (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get remove --yes drift-host
+
+      - name: Uninstall (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $uninstaller = "$env:LOCALAPPDATA\Programs\drift\unins000.exe"
+          Start-Process $uninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          # The uninstaller hands over to a temporary copy of itself and returns early: wait until it has finished.
+          for ($i = 0; $i -lt 60 -and (Test-Path $uninstaller); $i++) { Start-Sleep -Seconds 1 }
+
+      - name: Verify nothing is left
+        working-directory: host
+        shell: bash
+        run: uv run python packaging/verify_install.py removed "$DRIFT_INSTALLED" "$DRIFT_EXTENSION_ID"
+
   scripts:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -81,4 +168,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: shellcheck
-        run: shellcheck -x scripts/*.sh
+        run: |
+          shellcheck -x scripts/*.sh host/packaging/macos/build-pkg.sh host/packaging/linux/build-packages.sh
+          shellcheck -s sh host/packaging/macos/scripts/preinstall host/packaging/macos/scripts/postinstall.in \
+            host/packaging/macos/uninstall.sh.in host/packaging/linux/postinstall.sh.in host/packaging/linux/preremove.sh.in

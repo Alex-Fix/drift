@@ -10,8 +10,13 @@ import {
   pickReceiver,
   receiverLabel,
   sendHint,
+  DOWNLOAD_URL,
   deviceDetail,
+  hostCard,
+  hostProblem,
+  major,
   modeBadge,
+  platformOf,
   parseTheme,
   pickVideo,
   progress,
@@ -337,5 +342,43 @@ describe("the redesigned popup", () => {
       area: "M0 50 L50 6.4 L100 28.2 L100 50 L0 50 Z",
     });
     expect(sparkline([0, 0], 10, 10).line).toBe("M0 10 L10 10");
+  });
+});
+
+describe("the companion app", () => {
+  it("knows when drift-host is missing", () => {
+    expect(hostProblem("drift-host is not running or not installed", undefined, "1.0.0")).toEqual({ kind: "missing" });
+    expect(hostProblem("drift-host did not answer", undefined, "1.0.0")).toBeUndefined(); // running, just slow
+  });
+
+  it("asks to update a host older than the extension's major version", () => {
+    expect(hostProblem(undefined, "0.9.2", "1.0.0")).toEqual({ kind: "outdated", host: "0.9.2", needed: 1 });
+    expect(hostProblem(undefined, "1.0.0rc1", "1.2.0")).toBeUndefined();
+    expect(hostProblem(undefined, "2.0.0", "1.0.0")).toBeUndefined(); // newer host: the extension updates itself
+    expect(hostProblem(undefined, "weird", "1.0.0")).toBeUndefined();
+  });
+
+  it("reads major versions", () => {
+    expect(major("1.0.0rc1")).toBe(1);
+    expect(major("12.3.4")).toBe(12);
+    expect(major("v1")).toBeUndefined();
+  });
+
+  it("offers the download for the user's OS", () => {
+    expect(platformOf("macOS")).toBe("macOS");
+    expect(platformOf("MacIntel")).toBe("macOS");
+    expect(platformOf("Windows")).toBe("Windows");
+    expect(platformOf("Win32")).toBe("Windows");
+    expect(platformOf("Linux x86_64")).toBe("Linux");
+    expect(platformOf("Chrome OS")).toBeUndefined();
+    expect(hostCard({ kind: "missing" }, "Windows").button).toBe("Download for Windows");
+    expect(hostCard({ kind: "missing" }, undefined).button).toBe("Download drift-host");
+    expect(hostCard({ kind: "outdated", host: "0.9.0", needed: 1 }, "macOS").text).toMatch(
+      /needs drift-host 1 or newer \(you have 0\.9\.0\)/,
+    );
+  });
+
+  it("links only to drift's own releases", () => {
+    expect(DOWNLOAD_URL).toBe("https://github.com/Alex-Fix/drift/releases/latest");
   });
 });

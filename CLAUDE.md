@@ -75,6 +75,7 @@ All scripts run from the repo root.
 ## Skills in this repo
 
 - `brainstorming` — turn an idea into an approved design doc in `docs/plans/` before coding
+- `design` — drift's visual language: themes and tokens, components, page remote, icon rules, verifying visuals
 - `security` — threat model (hostile pages, LAN), host/extension hardening, review checklist
 - `protocol` — how to add or change a native-messaging message end to end
 - `extension` — MV3 extension conventions and scaffolding

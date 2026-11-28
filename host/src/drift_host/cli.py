@@ -6,15 +6,17 @@ other invocation is a developer command.
 
 import argparse
 import asyncio
+import io
 import logging
 import sys
 import time
 import wave
 from pathlib import Path
+from typing import cast
 
 import platformdirs
 
-from drift_host import install
+from drift_host import __version__, install
 from drift_host.airplay import PyatvReceivers
 
 APP = "drift"
@@ -24,8 +26,14 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if args and args[0].startswith("chrome-extension://"):
         return _serve()
+    # Developer commands print to a console that may not be UTF-8 (Windows' cp1252): show "?" rather than crash on an
+    # arrow or a receiver's name. (Serving uses binary stdio and never reaches here.)
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(errors="replace")
 
     parser = argparse.ArgumentParser(prog="drift-host", description="AirPlay host for the drift browser extension.")
+    parser.add_argument("--version", action="version", version=f"drift-host {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
     scan = commands.add_parser("scan", help="list AirPlay receivers on the network")
     scan.add_argument("--timeout", type=float, default=3.0, help="seconds (default 3)")
@@ -53,10 +61,24 @@ def main(argv: list[str] | None = None) -> int:
         "--controls", action="store_true", help="halfway through: pause 3 s, jump 30 s ahead, resume"
     )
     stream_url.add_argument("url", help="http(s) URL of an MP4/MOV file or an HLS playlist (.m3u8)")
+    commands.add_parser(
+        "check", help="check this drift-host can load everything it uses (packaged builds run it in CI)"
+    )
     for name in ("install", "uninstall"):
-        command = commands.add_parser(name, help=f"{name} the native-messaging host for a browser")
-        command.add_argument("--extension-id", required=True, help="the id shown on chrome://extensions")
-        command.add_argument("--browser", choices=install.BROWSERS, default="chrome")
+        command = commands.add_parser(name, help=f"{name} the native-messaging host for Chromium browsers")
+        command.add_argument(
+            "--extension-id",
+            required=install.STORE_EXTENSION_ID is None,
+            default=install.STORE_EXTENSION_ID,
+            help="the id shown on chrome://extensions"
+            + ("" if install.STORE_EXTENSION_ID is None else " (default: the Chrome Web Store extension)"),
+        )
+        command.add_argument("--browser", choices=(*install.BROWSERS, "all"), default="all")
+        command.add_argument(
+            "--system",
+            action="store_true",
+            help="for every user on this machine (macOS and Linux, as root; what the installers do)",
+        )
     parsed = parser.parse_args(args)
 
     match parsed.command:
@@ -86,21 +108,36 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except KeyboardInterrupt:
                 return 130
+        case "check":
+            return _check()
         case "install" | "uninstall":
-            p = install.plan(
-                parsed.browser,
-                parsed.extension_id,
-                system=install.current_system(),
-                home=Path.home(),
-                data_dir=Path(platformdirs.user_data_dir(APP, appauthor=False)),
-                python=sys.executable,
-            )
-            if parsed.command == "install":
-                install.install(p)
-                print(f"installed {install.HOST_NAME} for {parsed.browser}: {p.manifest}")
-            else:
-                install.uninstall(p)
-                print(f"removed {p.manifest}")
+            browsers = install.BROWSERS if parsed.browser == "all" else (cast("install.Browser", parsed.browser),)
+            try:
+                plans = install.plans(
+                    browsers,
+                    parsed.extension_id,
+                    system=install.current_system(),
+                    home=Path.home(),
+                    data_dir=Path(platformdirs.user_data_dir(APP, appauthor=False)),
+                    python=sys.executable,
+                    executable=install.packaged_executable(),
+                    scope="system" if parsed.system else "user",
+                )
+            except ValueError as e:
+                print(f"drift-host {parsed.command}: {e}", file=sys.stderr)
+                return 2
+            if parsed.browser == "all" and not parsed.system and parsed.command == "install":
+                plans = [p for p in plans if install.browser_present(p)]
+                if not plans:
+                    print("no Chromium browser profile found; name one with --browser", file=sys.stderr)
+                    return 1
+            for p in plans:
+                if parsed.command == "install":
+                    install.install(p)
+                    print(f"installed {install.HOST_NAME}: {p.manifest}")
+                else:
+                    install.uninstall(p)
+                    print(f"removed {p.manifest}")
             return 0
     return 2
 
@@ -117,6 +154,39 @@ def _serve() -> int:
     stdin, stdout = messaging.binary_stdio()
     asyncio.run(app.serve(PyatvReceivers(credentials_path()), stdin, stdout))
     return 0
+
+
+def _check() -> int:
+    """Import every module drift-host and pyatv can load (much of it lazily: scanning, pairing, mirroring) and start an
+    SRP session, so a packaged build missing a module fails here instead of in front of a TV."""
+    import importlib
+    import pkgutil
+
+    import pyatv
+
+    import drift_host
+
+    failed = []
+    count = 0
+    for package, prefix in ((drift_host, "drift_host."), (pyatv, "pyatv.")):
+        for module in pkgutil.walk_packages(package.__path__, prefix):
+            if module.name.startswith("pyatv.scripts"):  # pyatv's own command-line tools: not used
+                continue
+            count += 1
+            try:
+                importlib.import_module(module.name)
+            except Exception as e:  # report every missing module, not just the first
+                failed.append(f"{module.name}: {e}")
+    from pyatv.auth.hap_srp import SRPAuthHandler
+
+    # pyatv's SRP handler has no type hints.
+    handler = SRPAuthHandler()  # type: ignore[no-untyped-call]
+    handler.initialize()  # type: ignore[no-untyped-call]
+    handler.step1(1234)  # type: ignore[no-untyped-call]  # pairing's first step (srptools; see pyproject.toml)
+    for line in failed:
+        print(f"missing {line}", file=sys.stderr)
+    print(f"drift-host {__version__}: {count - len(failed)}/{count} modules load, pairing starts")
+    return 1 if failed else 0
 
 
 def credentials_path() -> Path:
